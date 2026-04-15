@@ -333,3 +333,39 @@ async def test_execute_empty_corpus_maps_to_empty_corpus_code():
         with pytest.raises(BackendError) as exc:
             await a.execute(query="q", corpus_id="cor_empty", constraints=None)
         assert exc.value.code == RecoveryEnum.EMPTY_CORPUS
+
+
+# --- citation normalizer ---
+
+
+def test_normalize_citations_two_chunks_two_citations():
+    fake = _mk_response("ans", citations_count=2)
+    a = GeminiFSBackend(api_key="g_test")
+    cites = a._normalize_citations(
+        fake.candidates[0].grounding_metadata, corpus_id="cor_z", limit=10
+    )
+    assert len(cites) == 2
+    c0 = cites[0]
+    assert c0["text"] == "citation text 0"
+    assert c0["source_url"] == "gemini://file/0"
+    assert c0["author"] is None
+    assert c0["date"] is None
+    assert c0["confidence"] is None
+    assert c0["backend_used"] == "gemini_fs"
+    assert c0["raw"]["chunk_index"] == 0
+    assert c0["raw"]["title"] == "doc_0.pdf"
+    assert c0["raw"]["segment_range"] == [0, 10]
+
+
+def test_normalize_citations_uri_fallback():
+    """When chunk has no uri, fall back to gemini://corpus/{cid}/chunk/{idx}."""
+    chunk = MagicMock()
+    chunk.retrieved_context = MagicMock(uri=None, title="t.pdf")
+    support = MagicMock()
+    support.segment = MagicMock(text="segtext", start_index=0, end_index=5)
+    support.grounding_chunk_indices = [0]
+    grounding = MagicMock(grounding_chunks=[chunk], grounding_supports=[support])
+
+    a = GeminiFSBackend(api_key="g_test")
+    cites = a._normalize_citations(grounding, corpus_id="cor_q", limit=10)
+    assert cites[0]["source_url"] == "gemini://corpus/cor_q/chunk/0"
