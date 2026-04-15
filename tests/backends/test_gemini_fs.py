@@ -102,6 +102,44 @@ async def test_poll_status_unknown_corpus_raises(tmp_path):
     assert exc.value.code == RecoveryEnum.CORPUS_NOT_FOUND
 
 
+# --- list_corpora ---
+
+
+@pytest.mark.asyncio
+async def test_list_corpora_empty():
+    a = GeminiFSBackend(api_key="g_test")
+    assert await a.list_corpora() == []
+
+
+@pytest.mark.asyncio
+async def test_list_corpora_one(tmp_path):
+    f = tmp_path / "x.pdf"
+    f.write_bytes(b"x")
+    a = GeminiFSBackend(api_key="g_test")
+    up = await a.upload_files([str(f)])
+    out = await a.list_corpora()
+    assert len(out) == 1
+    summary = out[0]
+    assert summary["corpus_id"] == up["corpus_id"]
+    assert summary["file_count"] == 1
+    assert summary["indexed_file_count"] == 0
+    assert summary["total_bytes"] == 1
+    assert summary["backend"] == "gemini_fs"
+    assert isinstance(summary["created_at"], str)
+
+
+@pytest.mark.asyncio
+async def test_list_corpora_two(tmp_path):
+    a = GeminiFSBackend(api_key="g_test")
+    f1 = tmp_path / "a.pdf"
+    f1.write_bytes(b"aa")
+    f2 = tmp_path / "b.txt"
+    f2.write_bytes(b"bbb")
+    await a.upload_files([str(f1)])
+    await a.upload_files([str(f2)])
+    assert len(await a.list_corpora()) == 2
+
+
 @pytest.mark.asyncio
 async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
     f = tmp_path / "big.pdf"

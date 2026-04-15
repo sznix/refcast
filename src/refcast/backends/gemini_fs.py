@@ -10,6 +10,7 @@ from typing import Any
 from refcast.backends.base import BackendError
 from refcast.models import (
     CorpusStatusResult,
+    CorpusSummary,
     CorpusUploadResult,
     RecoveryEnum,
     ResearchConstraints,
@@ -87,6 +88,22 @@ class GeminiFSBackend:
             "warnings": [],
             "last_checked_at": _dt.datetime.now(_dt.UTC).isoformat(),
         }
+
+    async def list_corpora(self) -> list[CorpusSummary]:
+        out: list[CorpusSummary] = []
+        for cid, rec in self._states.items():
+            out.append(
+                {
+                    "corpus_id": cid,
+                    "name": rec.get("name"),
+                    "file_count": rec["file_count"],
+                    "indexed_file_count": rec["indexed_file_count"],
+                    "total_bytes": rec["total_bytes"],
+                    "created_at": rec["created_at"],
+                    "backend": "gemini_fs",
+                }
+            )
+        return out
 
     def _mark_complete(self, corpus_id: str) -> None:
         """Test/internal helper — simulate operation completion."""
