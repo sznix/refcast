@@ -5,9 +5,11 @@ from __future__ import annotations
 import datetime as _dt
 import uuid
 from pathlib import Path
+from typing import Any
 
 from refcast.backends.base import BackendError
 from refcast.models import (
+    CorpusStatusResult,
     CorpusUploadResult,
     RecoveryEnum,
     ResearchConstraints,
@@ -31,6 +33,9 @@ class GeminiFSBackend:
                 recovery_action="user_action",
             )
         self._api_key = api_key
+        # In-memory tracker until google-genai operations.get is wired up.
+        # Each entry maps corpus_id -> mutable record carrying counts + metadata.
+        self._states: dict[str, dict[str, Any]] = {}
 
     async def upload_files(self, files: list[str]) -> CorpusUploadResult:
         for p in files:
@@ -38,14 +43,58 @@ class GeminiFSBackend:
 
         corpus_id = f"cor_{uuid.uuid4().hex[:12]}"
         op_id = await self._start_upload_operation(corpus_id, files)
+        started = _dt.datetime.now(_dt.UTC).isoformat()
+
+        total_bytes = sum(Path(f).stat().st_size for f in files)
+        self._states[corpus_id] = {
+            "corpus_id": corpus_id,
+            "operation_id": op_id,
+            "files": list(files),
+            "file_count": len(files),
+            "indexed_file_count": 0,
+            "indexed": False,
+            "total_bytes": total_bytes,
+            "created_at": started,
+            "started_at": started,
+        }
 
         return {
             "corpus_id": corpus_id,
             "operation_id": op_id,
             "status": "indexing",
             "file_count": len(files),
-            "started_at": _dt.datetime.now(_dt.UTC).isoformat(),
+            "started_at": started,
         }
+
+    async def poll_status(self, corpus_id: str) -> CorpusStatusResult:
+        rec = self._states.get(corpus_id)
+        if rec is None:
+            raise BackendError(
+                RecoveryEnum.CORPUS_NOT_FOUND,
+                f"Unknown corpus: {corpus_id}",
+                backend=self.id,
+                recovery_action="user_action",
+            )
+        file_count: int = rec["file_count"]
+        indexed_count: int = rec["indexed_file_count"]
+        progress = (indexed_count / file_count) if file_count else 0.0
+        return {
+            "corpus_id": corpus_id,
+            "indexed": bool(rec["indexed"]),
+            "file_count": file_count,
+            "indexed_file_count": indexed_count,
+            "progress": progress,
+            "warnings": [],
+            "last_checked_at": _dt.datetime.now(_dt.UTC).isoformat(),
+        }
+
+    def _mark_complete(self, corpus_id: str) -> None:
+        """Test/internal helper — simulate operation completion."""
+        rec = self._states.get(corpus_id)
+        if rec is None:
+            return
+        rec["indexed_file_count"] = rec["file_count"]
+        rec["indexed"] = True
 
     def _validate_path(self, path: str) -> None:
         p = Path(path)

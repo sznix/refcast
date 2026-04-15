@@ -67,6 +67,41 @@ async def test_upload_files_wrong_format_raises(tmp_path):
     assert exc.value.code == RecoveryEnum.UNSUPPORTED_FORMAT
 
 
+# --- poll_status ---
+
+
+@pytest.mark.asyncio
+async def test_poll_status_indexing_then_complete(tmp_path):
+    f = tmp_path / "paper.pdf"
+    f.write_bytes(b"%PDF-1.4")
+    a = GeminiFSBackend(api_key="g_test")
+    up = await a.upload_files([str(f)])
+    cid = up["corpus_id"]
+
+    s1 = await a.poll_status(cid)
+    assert s1["corpus_id"] == cid
+    assert s1["indexed"] is False
+    assert s1["file_count"] == 1
+    assert s1["indexed_file_count"] == 0
+    assert s1["progress"] == 0.0
+    assert s1["warnings"] == []
+    assert isinstance(s1["last_checked_at"], str)
+
+    a._mark_complete(cid)
+    s2 = await a.poll_status(cid)
+    assert s2["indexed"] is True
+    assert s2["indexed_file_count"] == 1
+    assert s2["progress"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_poll_status_unknown_corpus_raises(tmp_path):
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.poll_status("cor_unknown")
+    assert exc.value.code == RecoveryEnum.CORPUS_NOT_FOUND
+
+
 @pytest.mark.asyncio
 async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
     f = tmp_path / "big.pdf"
