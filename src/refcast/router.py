@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from refcast.backends.base import BackendError
+from refcast.models import RecoveryEnum, ResearchResult, StructuredError
 
 if TYPE_CHECKING:
     from refcast.backends.base import BackendAdapter
     from refcast.models import ResearchConstraints
 
 FallbackScope = Literal["none", "same", "broader", "different"]
+RecoveryAction = Literal["retry", "fallback", "user_action"]
 
 _DEFAULT_ORDER_WITH_CORPUS = ["gemini_fs", "exa"]
 _DEFAULT_ORDER_WEB_ONLY = ["exa"]
@@ -72,7 +76,150 @@ def select_backends(
         adapter = registered.get(backend_id)
         if adapter is None:
             continue
-        if corpus_id is not None and "upload" not in adapter.capabilities:
+        # Filter non-upload backends when corpus_id is set, UNLESS a preferred
+        # backend is explicitly chosen — preference opts into scope-broadening
+        # fallback (Exa becomes a valid fallback even though it cannot serve
+        # the corpus; the fallback_scope classifier flags this as "broader").
+        if (
+            corpus_id is not None
+            and not preferred
+            and "upload" not in adapter.capabilities
+        ):
             continue
         out.append(adapter)
     return out
+
+
+_RECOVERY_HINTS: dict[RecoveryEnum, str] = {
+    RecoveryEnum.RATE_LIMITED: "Wait then retry, or accept fallback result.",
+    RecoveryEnum.QUOTA_EXCEEDED: "Check API quota at provider dashboard.",
+    RecoveryEnum.NETWORK_TIMEOUT: "Retry with longer timeout.",
+    RecoveryEnum.AUTH_INVALID: "Check API key. Run: refcast auth",
+    RecoveryEnum.CORPUS_NOT_FOUND: "Verify corpus_id with corpus.list",
+    RecoveryEnum.EMPTY_CORPUS: "Upload files to the corpus first.",
+    RecoveryEnum.BACKEND_UNAVAILABLE: "Backend temporarily unavailable; retry later.",
+    RecoveryEnum.SCHEMA_MISMATCH: "Backend returned unexpected schema; report bug.",
+    RecoveryEnum.PARSE_ERROR: "Backend response unparseable; trying fallback.",
+    RecoveryEnum.INDEXING_IN_PROGRESS: "Poll corpus.status until indexed=true.",
+    RecoveryEnum.FILE_TOO_LARGE: "Split file under 100MB before upload.",
+    RecoveryEnum.UNSUPPORTED_FORMAT: "Use PDF, TXT, HTML, or DOCX.",
+    RecoveryEnum.PARTIAL_INDEX: "Some files failed to index; results from indexed subset.",
+    RecoveryEnum.UNKNOWN: "Unexpected error; check raw field for details.",
+}
+
+
+def _hint_for(code: RecoveryEnum) -> str:
+    return _RECOVERY_HINTS.get(code, "Unknown error.")
+
+
+def _be_to_struct(e: BackendError, fallback_used: bool) -> StructuredError:
+    action = cast(RecoveryAction, e.recovery_action)
+    return StructuredError(
+        code=e.code,
+        message=e.message,
+        recovery_hint=_hint_for(e.code),
+        recovery_action=action,
+        fallback_used=fallback_used,
+        partial_results=False,
+        retry_after_ms=e.retry_after_ms,
+        backend=e.backend,
+        raw=e.raw,
+    )
+
+
+def _failed_result(
+    code: RecoveryEnum,
+    message: str,
+    recovery_action: RecoveryAction,
+    *,
+    warnings: list[StructuredError],
+    retry_after_ms: int | None = None,
+    backend: str | None = None,
+    raw: dict[str, Any] | None = None,
+) -> ResearchResult:
+    error = StructuredError(
+        code=code,
+        message=message,
+        recovery_hint=_hint_for(code),
+        recovery_action=recovery_action,
+        fallback_used=False,
+        partial_results=False,
+        retry_after_ms=retry_after_ms,
+        backend=backend,
+        raw=raw or {},
+    )
+    return ResearchResult(
+        answer="",
+        citations=[],
+        backend_used=backend or "",
+        latency_ms=0,
+        cost_cents=0.0,
+        fallback_scope="none",
+        warnings=warnings,
+        error=error,
+    )
+
+
+async def execute_research(
+    query: str,
+    corpus_id: str | None,
+    constraints: ResearchConstraints | None,
+    registered: dict[str, BackendAdapter],
+) -> ResearchResult:
+    """Serial fallback orchestrator.
+
+    Iterates backends from `select_backends` order; on BackendError with
+    recovery_action='fallback' and more candidates remaining, records a warning
+    and tries the next. Otherwise returns the failed result.
+    """
+    backends = select_backends(corpus_id, constraints, registered)
+    if not backends:
+        return _failed_result(
+            RecoveryEnum.BACKEND_UNAVAILABLE,
+            "No backends configured for this query",
+            "user_action",
+            warnings=[],
+        )
+
+    primary = backends[0]
+    warnings: list[StructuredError] = []
+
+    for idx, backend in enumerate(backends):
+        is_last = idx == len(backends) - 1
+        try:
+            result = await backend.execute(query, corpus_id, constraints)
+        except BackendError as e:
+            action = cast(RecoveryAction, e.recovery_action)
+            if action != "fallback" or is_last:
+                return _failed_result(
+                    e.code,
+                    e.message,
+                    action,
+                    warnings=warnings,
+                    retry_after_ms=e.retry_after_ms,
+                    backend=e.backend,
+                    raw=e.raw,
+                )
+            warnings.append(_be_to_struct(e, fallback_used=True))
+            continue
+
+        # Success path
+        scope = classify_scope_shift(
+            primary=primary.id,
+            served=backend.id,
+            primary_corpus_id=corpus_id,
+            served_corpus_id=corpus_id if "upload" in backend.capabilities else None,
+            fell_back=(idx > 0),
+        )
+        result["fallback_scope"] = scope
+        existing = result.get("warnings") or []
+        result["warnings"] = warnings + list(existing)
+        return result
+
+    # Defensive: unreachable in practice
+    return _failed_result(
+        RecoveryEnum.BACKEND_UNAVAILABLE,
+        "All backends exhausted",
+        "user_action",
+        warnings=warnings,
+    )
