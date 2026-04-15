@@ -19,9 +19,7 @@ if TYPE_CHECKING:
 _PARTIAL_INDEX_HINT = "Some files failed to index; results from indexed subset."
 
 
-def _partial_index_warning(
-    *, indexed: int, total: int, corpus_id: str | None
-) -> StructuredError:
+def _partial_index_warning(*, indexed: int, total: int, corpus_id: str | None) -> StructuredError:
     return {
         "code": RecoveryEnum.PARTIAL_INDEX,
         "message": (

@@ -19,9 +19,7 @@ def register(mcp: FastMCP, backends: dict[str, BackendAdapter]) -> None:
         """List all corpora known to the Gemini FS backend."""
         gemini = backends.get("gemini_fs")
         if gemini is None:
-            return err_envelope(
-                "gemini_fs backend not registered; corpus operations require it"
-            )
+            return err_envelope("gemini_fs backend not registered; corpus operations require it")
         try:
             corpora = await gemini.list_corpora()  # type: ignore[attr-defined]
         except BackendError as e:

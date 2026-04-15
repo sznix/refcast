@@ -1,4 +1,5 @@
 """Tests for 25KB response-size enforcement."""
+
 from __future__ import annotations
 
 import json

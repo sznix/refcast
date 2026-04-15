@@ -1,4 +1,5 @@
 """Tests for MCP server entry point."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -41,9 +42,7 @@ async def test_build_server_registers_five_tools(
         "corpus.delete",
         "research",
     }
-    assert expected.issubset(tool_names), (
-        f"Expected {expected} to be registered; got {tool_names}"
-    )
+    assert expected.issubset(tool_names), f"Expected {expected} to be registered; got {tool_names}"
 
 
 @pytest.mark.asyncio

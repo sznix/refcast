@@ -19,9 +19,7 @@ def register(mcp: FastMCP, backends: dict[str, BackendAdapter]) -> None:
         """Delete a corpus and release its storage."""
         gemini = backends.get("gemini_fs")
         if gemini is None:
-            return err_envelope(
-                "gemini_fs backend not registered; corpus operations require it"
-            )
+            return err_envelope("gemini_fs backend not registered; corpus operations require it")
         try:
             result = await gemini.delete_corpus(corpus_id)  # type: ignore[attr-defined]
         except BackendError as e:

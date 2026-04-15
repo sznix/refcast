@@ -22,9 +22,7 @@ def register(mcp: FastMCP, backends: dict[str, BackendAdapter]) -> None:
         """
         gemini = backends.get("gemini_fs")
         if gemini is None:
-            return err_envelope(
-                "gemini_fs backend not registered; corpus operations require it"
-            )
+            return err_envelope("gemini_fs backend not registered; corpus operations require it")
         try:
             result = await gemini.upload_files(files)  # type: ignore[attr-defined]
         except BackendError as e:

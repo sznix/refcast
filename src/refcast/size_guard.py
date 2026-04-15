@@ -23,9 +23,11 @@ def enforce_response_size(result: dict[str, Any]) -> dict[str, Any]:
     citations = list(out.get("citations", []))
     warnings = list(out.get("warnings", []))
 
-    while citations and _serialized_size(
-        {**out, "citations": citations, "warnings": warnings}
-    ) > RESPONSE_SIZE_LIMIT_BYTES:
+    while (
+        citations
+        and _serialized_size({**out, "citations": citations, "warnings": warnings})
+        > RESPONSE_SIZE_LIMIT_BYTES
+    ):
         citations.pop()
 
     truncation_warning: StructuredError = {

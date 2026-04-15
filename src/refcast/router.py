@@ -80,11 +80,7 @@ def select_backends(
         # backend is explicitly chosen — preference opts into scope-broadening
         # fallback (Exa becomes a valid fallback even though it cannot serve
         # the corpus; the fallback_scope classifier flags this as "broader").
-        if (
-            corpus_id is not None
-            and not preferred
-            and "upload" not in adapter.capabilities
-        ):
+        if corpus_id is not None and not preferred and "upload" not in adapter.capabilities:
             continue
         out.append(adapter)
     return out

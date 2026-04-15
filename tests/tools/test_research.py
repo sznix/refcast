@@ -1,4 +1,5 @@
 """Tests for research MCP tool — happy path + serial fallback."""
+
 from __future__ import annotations
 
 from typing import Any

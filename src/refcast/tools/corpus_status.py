@@ -19,9 +19,7 @@ def register(mcp: FastMCP, backends: dict[str, BackendAdapter]) -> None:
         """Return indexing progress for a corpus."""
         gemini = backends.get("gemini_fs")
         if gemini is None:
-            return err_envelope(
-                "gemini_fs backend not registered; corpus operations require it"
-            )
+            return err_envelope("gemini_fs backend not registered; corpus operations require it")
         try:
             result = await gemini.poll_status(corpus_id)  # type: ignore[attr-defined]
         except BackendError as e:

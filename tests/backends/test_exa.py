@@ -282,9 +282,7 @@ async def test_execute_maps_sdk_exception_to_backend_error():
     """SDK exceptions raised during search_and_contents are mapped via _map_exception."""
     with patch("refcast.backends.exa.Exa") as mock_cls:
         client = MagicMock()
-        client.search_and_contents = MagicMock(
-            side_effect=Exception("HTTP 429 rate_limited")
-        )
+        client.search_and_contents = MagicMock(side_effect=Exception("HTTP 429 rate_limited"))
         mock_cls.return_value = client
 
         a = ExaBackend(api_key="exa_test")

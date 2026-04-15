@@ -200,9 +200,7 @@ def _backend(id, caps, exec_result=None, exec_error=None):
 
 @pytest.mark.asyncio
 async def test_execute_research_primary_succeeds_no_fallback():
-    g = _backend(
-        "gemini_fs", {"search", "upload", "cite"}, exec_result=_ok_result("gemini_fs")
-    )
+    g = _backend("gemini_fs", {"search", "upload", "cite"}, exec_result=_ok_result("gemini_fs"))
     e = _backend("exa", {"search", "cite"}, exec_result=_ok_result("exa"))
     result = await execute_research(
         query="q",
@@ -283,9 +281,7 @@ async def test_execute_research_all_backends_fail():
 
 @pytest.mark.asyncio
 async def test_execute_research_no_backends_returns_error():
-    result = await execute_research(
-        query="q", corpus_id=None, constraints=None, registered={}
-    )
+    result = await execute_research(query="q", corpus_id=None, constraints=None, registered={})
     assert result["error"] is not None
     assert result["error"]["code"] == RecoveryEnum.BACKEND_UNAVAILABLE
     assert result["error"]["recovery_action"] == "user_action"

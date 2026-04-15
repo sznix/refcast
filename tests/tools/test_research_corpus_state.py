@@ -1,4 +1,5 @@
 """Tests for research tool corpus-state coverage: EMPTY/INDEXING/PARTIAL_INDEX."""
+
 from __future__ import annotations
 
 from typing import Any

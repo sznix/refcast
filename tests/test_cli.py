@@ -1,4 +1,5 @@
 """Tests for refcast.cli."""
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
