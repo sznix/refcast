@@ -1,12 +1,54 @@
 """Tests for Gemini File Search adapter."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from refcast.backends.base import BackendError
 from refcast.backends.gemini_fs import GeminiFSBackend
 from refcast.models import RecoveryEnum
+
+# Note on mocking strategy: google-genai's HTTP transport is not cleanly
+# interceptable via respx in all paths (it uses its own client wrapper).
+# We mock at the SDK boundary via unittest.mock.patch on `genai.Client`,
+# which gives us deterministic control over the response shape.
+
+
+def _mk_response(answer_text, citations_count, input_tokens=42, output_tokens=18):
+    """Build a fake google-genai response object."""
+    chunks = []
+    supports = []
+    for i in range(citations_count):
+        chunk = MagicMock()
+        chunk.retrieved_context = MagicMock(uri=f"gemini://file/{i}", title=f"doc_{i}.pdf")
+        chunks.append(chunk)
+        support = MagicMock()
+        support.segment = MagicMock(
+            text=f"citation text {i}", start_index=i * 10, end_index=(i + 1) * 10
+        )
+        support.grounding_chunk_indices = [i]
+        supports.append(support)
+
+    grounding = (
+        MagicMock(grounding_chunks=chunks, grounding_supports=supports)
+        if citations_count > 0
+        else None
+    )
+
+    candidate = MagicMock()
+    candidate.content = MagicMock(parts=[MagicMock(text=answer_text)])
+    candidate.grounding_metadata = grounding
+    candidate.finish_reason = "STOP"
+
+    response = MagicMock()
+    response.candidates = [candidate]
+    response.usage_metadata = MagicMock(
+        prompt_token_count=input_tokens,
+        candidates_token_count=output_tokens,
+        total_token_count=input_tokens + output_tokens,
+    )
+    return response
 
 
 def test_adapter_id_and_capabilities():
@@ -186,3 +228,108 @@ async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
     with pytest.raises(BackendError) as exc:
         await a.upload_files([str(f)])
     assert exc.value.code == RecoveryEnum.FILE_TOO_LARGE
+
+
+# --- execute ---
+
+
+@pytest.mark.asyncio
+async def test_execute_populates_citations_and_backend():
+    fake = _mk_response("Q3 revenue was $4.2M", citations_count=2)
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(return_value=fake)
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.execute(query="What was Q3 revenue?", corpus_id="cor_x", constraints=None)
+
+    assert result["backend_used"] == "gemini_fs"
+    assert result["fallback_scope"] == "none"
+    assert len(result["citations"]) == 2
+    assert result["citations"][0]["backend_used"] == "gemini_fs"
+    assert result["citations"][0]["confidence"] is None
+    assert result["citations"][0]["text"] == "citation text 0"
+    assert result["citations"][0]["source_url"] == "gemini://file/0"
+    assert isinstance(result["cost_cents"], float)
+    assert result["latency_ms"] >= 0
+    assert result["error"] is None
+    assert result["answer"] == "Q3 revenue was $4.2M"
+
+
+@pytest.mark.asyncio
+async def test_execute_without_corpus_id_no_filesearch_tool():
+    fake = _mk_response("general answer", citations_count=1)
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        gc = AsyncMock(return_value=fake)
+        client.aio.models.generate_content = gc
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        # require_citation=False to avoid PARSE_ERROR; test focuses on tool config
+        await a.execute(query="q", corpus_id=None, constraints={"require_citation": False})
+
+    # When no corpus_id, config should be None (no FileSearch tool)
+    call_kwargs = gc.call_args.kwargs
+    assert call_kwargs.get("config") is None
+
+
+@pytest.mark.asyncio
+async def test_execute_require_citation_zero_raises_parse_error():
+    fake = _mk_response("answer without citations", citations_count=0)
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(return_value=fake)
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        with pytest.raises(BackendError) as exc:
+            await a.execute(query="q", corpus_id="cor_x", constraints={"require_citation": True})
+        assert exc.value.code == RecoveryEnum.PARSE_ERROR
+        assert exc.value.recovery_action == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_execute_require_citation_false_allows_zero():
+    fake = _mk_response("plain answer", citations_count=0)
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(return_value=fake)
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.execute(
+            query="q", corpus_id="cor_x", constraints={"require_citation": False}
+        )
+        assert result["citations"] == []
+        assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_max_citations_truncates():
+    fake = _mk_response("ans", citations_count=10)
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(return_value=fake)
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.execute(query="q", corpus_id="cor_x", constraints={"max_citations": 3})
+        assert len(result["citations"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_execute_empty_corpus_maps_to_empty_corpus_code():
+    """Gemini error mentioning 'empty' or 'FAILED_PRECONDITION' maps to EMPTY_CORPUS."""
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(
+            side_effect=Exception("FAILED_PRECONDITION: File search store is empty")
+        )
+        mock_cls.return_value = client
+
+        a = GeminiFSBackend(api_key="g_test")
+        with pytest.raises(BackendError) as exc:
+            await a.execute(query="q", corpus_id="cor_empty", constraints=None)
+        assert exc.value.code == RecoveryEnum.EMPTY_CORPUS
