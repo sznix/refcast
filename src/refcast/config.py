@@ -25,6 +25,13 @@ class RefcastConfig:
     def has_any(self) -> bool:
         return bool(self.gemini_api_key or self.exa_api_key)
 
+    def __repr__(self) -> str:
+        return (
+            "RefcastConfig("
+            f"gemini_api_key={'***' if self.gemini_api_key else None}, "
+            f"exa_api_key={'***' if self.exa_api_key else None})"
+        )
+
 
 def _lookup(env_var: str, keyring_key: str) -> str | None:
     if v := os.environ.get(env_var):
