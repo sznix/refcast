@@ -1,6 +1,6 @@
 """Tests for refcast.models data shapes."""
 
-from refcast.models import RecoveryEnum, StructuredError, redact_raw
+from refcast.models import Citation, RecoveryEnum, StructuredError, redact_raw
 
 
 def test_recovery_enum_has_14_codes():
@@ -64,3 +64,30 @@ def test_redact_raw_leaves_originals_untouched():
     raw = {"authorization": "secret"}
     redact_raw(raw)
     assert raw["authorization"] == "secret"  # original unmodified
+
+
+def test_citation_shape():
+    c: Citation = {
+        "text": "The claim",
+        "source_url": "https://example.com",
+        "author": None,
+        "date": None,
+        "confidence": 0.87,
+        "backend_used": "gemini_fs",
+        "raw": {"chunk_id": 5},
+    }
+    assert c["confidence"] == 0.87
+    assert c["backend_used"] == "gemini_fs"
+
+
+def test_citation_confidence_optional():
+    c: Citation = {
+        "text": "x",
+        "source_url": "u",
+        "author": None,
+        "date": None,
+        "confidence": None,
+        "backend_used": "exa",
+        "raw": {},
+    }
+    assert c["confidence"] is None

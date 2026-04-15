@@ -57,3 +57,13 @@ class StructuredError(TypedDict):
     retry_after_ms: int | None
     backend: str | None
     raw: dict[str, Any]
+
+
+class Citation(TypedDict):
+    text: str
+    source_url: str
+    author: str | None
+    date: str | None
+    confidence: float | None
+    backend_used: str
+    raw: dict[str, Any]
