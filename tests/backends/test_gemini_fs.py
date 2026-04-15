@@ -140,6 +140,32 @@ async def test_list_corpora_two(tmp_path):
     assert len(await a.list_corpora()) == 2
 
 
+# --- delete_corpus ---
+
+
+@pytest.mark.asyncio
+async def test_delete_corpus_success(tmp_path):
+    a = GeminiFSBackend(api_key="g_test")
+    f = tmp_path / "x.pdf"
+    f.write_bytes(b"x")
+    up = await a.upload_files([str(f)])
+    cid = up["corpus_id"]
+    result = await a.delete_corpus(cid)
+    assert result["corpus_id"] == cid
+    assert result["deleted"] is True
+    assert result["files_removed"] == 1
+    assert await a.list_corpora() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_corpus_not_found_raises():
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.delete_corpus("cor_unknown")
+    assert exc.value.code == RecoveryEnum.CORPUS_NOT_FOUND
+    assert exc.value.recovery_action == "user_action"
+
+
 @pytest.mark.asyncio
 async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
     f = tmp_path / "big.pdf"

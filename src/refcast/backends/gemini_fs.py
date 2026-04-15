@@ -9,6 +9,7 @@ from typing import Any
 
 from refcast.backends.base import BackendError
 from refcast.models import (
+    CorpusDeleteResult,
     CorpusStatusResult,
     CorpusSummary,
     CorpusUploadResult,
@@ -104,6 +105,23 @@ class GeminiFSBackend:
                 }
             )
         return out
+
+    async def delete_corpus(self, corpus_id: str) -> CorpusDeleteResult:
+        rec = self._states.get(corpus_id)
+        if rec is None:
+            raise BackendError(
+                RecoveryEnum.CORPUS_NOT_FOUND,
+                f"Unknown corpus: {corpus_id}",
+                backend=self.id,
+                recovery_action="user_action",
+            )
+        files_removed: int = rec["file_count"]
+        del self._states[corpus_id]
+        return {
+            "corpus_id": corpus_id,
+            "deleted": True,
+            "files_removed": files_removed,
+        }
 
     def _mark_complete(self, corpus_id: str) -> None:
         """Test/internal helper — simulate operation completion."""
