@@ -113,3 +113,39 @@ def test_auth_invalid_store_exits_1(
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["auth", "--store", "s3"], input="g\ne\n")
     assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+def _make_cfg(*, gemini: str | None = None, exa: str | None = None) -> MagicMock:
+    cfg = MagicMock()
+    cfg.gemini_api_key = gemini
+    cfg.exa_api_key = exa
+    cfg.has_any.return_value = bool(gemini or exa)
+    return cfg
+
+
+def test_doctor_both_configured(runner: CliRunner) -> None:
+    with patch("refcast.cli.load_config", return_value=_make_cfg(gemini="g", exa="e")):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "configured" in result.output
+    assert "NOT configured" not in result.output
+
+
+def test_doctor_no_credentials_exits_1(runner: CliRunner) -> None:
+    with patch("refcast.cli.load_config", return_value=_make_cfg()):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "No backends" in result.output
+
+
+def test_doctor_partial_configured(runner: CliRunner) -> None:
+    with patch("refcast.cli.load_config", return_value=_make_cfg(gemini="g")):
+        result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "Gemini: configured" in result.output
+    assert "Exa:    NOT configured" in result.output

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import typer
 
+from refcast.config import load_config
+
 app = typer.Typer(help="refcast — portable research substrate CLI", no_args_is_help=True)
 
 ENV_EXAMPLE_CONTENT = """\
@@ -72,6 +74,15 @@ def auth(
         raise typer.Exit(code=1)
 
 
-@app.command(hidden=True)
-def _noop() -> None:  # pragma: no cover
-    """Placeholder — to be replaced in subsequent commits."""
+@app.command()
+def doctor() -> None:
+    """Report which backends are configured + reachable."""
+    cfg = load_config()
+    typer.echo("=== refcast doctor ===")
+    typer.echo(f"Gemini: {'configured' if cfg.gemini_api_key else 'NOT configured'}")
+    typer.echo(f"Exa:    {'configured' if cfg.exa_api_key else 'NOT configured'}")
+    if not cfg.has_any():
+        typer.echo("\nNo backends configured. Run: refcast auth", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("\nNext: register the MCP server in your client config:")
+    typer.echo('  "mcpServers": {"refcast": {"command": "refcast-mcp"}}')
