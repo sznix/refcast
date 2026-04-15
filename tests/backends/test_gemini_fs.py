@@ -1,5 +1,7 @@
 """Tests for Gemini File Search adapter."""
 
+import asyncio
+
 import pytest
 
 from refcast.backends.base import BackendError
@@ -20,3 +22,68 @@ def test_missing_api_key_raises_auth_invalid():
         GeminiFSBackend(api_key=None)
     assert exc.value.code == RecoveryEnum.AUTH_INVALID
     assert exc.value.recovery_action == "user_action"
+
+
+# --- upload_files ---
+
+
+@pytest.mark.asyncio
+async def test_upload_files_returns_indexing_status(tmp_path):
+    f = tmp_path / "paper.pdf"
+    f.write_bytes(b"%PDF-1.4\n%test")
+    a = GeminiFSBackend(api_key="g_test")
+    result = await a.upload_files([str(f)])
+    assert result["status"] == "indexing"
+    assert result["file_count"] == 1
+    assert result["corpus_id"].startswith("cor_")
+    assert result["operation_id"].startswith("operations/")
+
+
+def test_upload_files_relative_path_raises(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "paper.pdf"
+    f.write_bytes(b"test")
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        asyncio.run(a.upload_files(["paper.pdf"]))
+    assert exc.value.code == RecoveryEnum.UNSUPPORTED_FORMAT
+
+
+@pytest.mark.asyncio
+async def test_upload_files_missing_raises(tmp_path):
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.upload_files([str(tmp_path / "nope.pdf")])
+    assert exc.value.code == RecoveryEnum.UNSUPPORTED_FORMAT
+
+
+@pytest.mark.asyncio
+async def test_upload_files_wrong_format_raises(tmp_path):
+    f = tmp_path / "paper.exe"
+    f.write_bytes(b"x")
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.upload_files([str(f)])
+    assert exc.value.code == RecoveryEnum.UNSUPPORTED_FORMAT
+
+
+@pytest.mark.asyncio
+async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
+    f = tmp_path / "big.pdf"
+    f.write_bytes(b"x")
+    # Pretend file is >100MB via stat shim
+    real_stat = type(f).stat
+
+    class _FakeStat:
+        st_size = 200 * 1024 * 1024
+
+    def fake_stat(self, *a, **kw):
+        if self == f:
+            return _FakeStat()
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(type(f), "stat", fake_stat)
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.upload_files([str(f)])
+    assert exc.value.code == RecoveryEnum.FILE_TOO_LARGE
