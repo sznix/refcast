@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any, Literal, TypedDict
 
 
 class RecoveryEnum(StrEnum):
@@ -20,3 +21,39 @@ class RecoveryEnum(StrEnum):
     UNSUPPORTED_FORMAT = "unsupported_format"
     PARTIAL_INDEX = "partial_index"
     UNKNOWN = "unknown"
+
+
+_REDACT_KEYS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "api_key",
+        "x-goog-api-key",
+        "bearer",
+        "token",
+        "password",
+    }
+)
+
+
+def redact_raw(d: Any) -> Any:
+    """Deep-copy `d` replacing any sensitive key's value with '[REDACTED]'."""
+    if isinstance(d, dict):
+        return {
+            k: ("[REDACTED]" if k.lower() in _REDACT_KEYS else redact_raw(v)) for k, v in d.items()
+        }
+    if isinstance(d, list):
+        return [redact_raw(v) for v in d]
+    return d
+
+
+class StructuredError(TypedDict):
+    code: RecoveryEnum
+    message: str
+    recovery_hint: str
+    recovery_action: Literal["retry", "fallback", "user_action"]
+    fallback_used: bool
+    partial_results: bool
+    retry_after_ms: int | None
+    backend: str | None
+    raw: dict[str, Any]
