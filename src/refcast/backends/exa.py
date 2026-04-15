@@ -119,4 +119,51 @@ class ExaBackend:
         return out
 
     def _map_exception(self, e: Exception) -> BackendError:
-        raise NotImplementedError
+        """Map SDK / HTTP exceptions to BackendError with appropriate RecoveryEnum."""
+        text = str(e)
+        lower = text.lower()
+
+        # Priority 1: rate limited — 429, "rate limit", or "rate_limited"
+        if "429" in text or "rate limit" in lower or "rate_limited" in lower:
+            return BackendError(
+                RecoveryEnum.RATE_LIMITED,
+                text,
+                backend=self.id,
+                recovery_action="retry",
+                retry_after_ms=_DEFAULT_RATE_LIMIT_RETRY_MS,
+                raw={"original": text},
+            )
+
+        # Priority 2: auth invalid — 401, "unauthorized", "invalid api key"
+        if "401" in text or "unauthorized" in lower or "invalid api key" in lower:
+            return BackendError(
+                RecoveryEnum.AUTH_INVALID,
+                text,
+                backend=self.id,
+                recovery_action="user_action",
+                raw={"original": text},
+            )
+
+        # Priority 3: server errors and network/timeout issues
+        if (
+            any(code in text for code in ("500", "502", "503", "504"))
+            or "server error" in lower
+            or "timeout" in lower
+            or "connection" in lower
+        ):
+            return BackendError(
+                RecoveryEnum.BACKEND_UNAVAILABLE,
+                text,
+                backend=self.id,
+                recovery_action="fallback",
+                raw={"original": text},
+            )
+
+        # Default fallback
+        return BackendError(
+            RecoveryEnum.UNKNOWN,
+            text,
+            backend=self.id,
+            recovery_action="fallback",
+            raw={"original": text},
+        )
