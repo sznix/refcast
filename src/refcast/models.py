@@ -67,3 +67,56 @@ class Citation(TypedDict):
     confidence: float | None
     backend_used: str
     raw: dict[str, Any]
+
+
+class ResearchConstraints(TypedDict, total=False):
+    max_cost_cents: int
+    max_citations: int
+    date_after: str
+    require_citation: bool
+    preferred_backend: Literal["gemini_fs", "exa"]
+
+
+class ResearchResult(TypedDict):
+    answer: str
+    citations: list[Citation]
+    backend_used: str
+    latency_ms: int
+    cost_cents: float
+    fallback_scope: Literal["none", "same", "broader", "different"]
+    warnings: list[StructuredError]
+    error: StructuredError | None
+
+
+class CorpusUploadResult(TypedDict):
+    corpus_id: str
+    operation_id: str
+    status: Literal["indexing"]
+    file_count: int
+    started_at: str
+
+
+class CorpusStatusResult(TypedDict):
+    corpus_id: str
+    indexed: bool
+    file_count: int
+    indexed_file_count: int
+    progress: float
+    warnings: list[StructuredError]
+    last_checked_at: str
+
+
+class CorpusSummary(TypedDict):
+    corpus_id: str
+    name: str | None
+    file_count: int
+    indexed_file_count: int
+    total_bytes: int
+    created_at: str
+    backend: Literal["gemini_fs"]
+
+
+class CorpusDeleteResult(TypedDict):
+    corpus_id: str
+    deleted: bool
+    files_removed: int

@@ -1,6 +1,17 @@
 """Tests for refcast.models data shapes."""
 
-from refcast.models import Citation, RecoveryEnum, StructuredError, redact_raw
+from refcast.models import (
+    Citation,
+    CorpusDeleteResult,
+    CorpusStatusResult,
+    CorpusSummary,
+    CorpusUploadResult,
+    RecoveryEnum,
+    ResearchConstraints,
+    ResearchResult,
+    StructuredError,
+    redact_raw,
+)
 
 
 def test_recovery_enum_has_14_codes():
@@ -91,3 +102,64 @@ def test_citation_confidence_optional():
         "raw": {},
     }
     assert c["confidence"] is None
+
+
+def test_research_constraints_all_optional():
+    rc: ResearchConstraints = {}
+    assert rc == {}
+
+
+def test_research_result_full_shape():
+    rr: ResearchResult = {
+        "answer": "x",
+        "citations": [],
+        "backend_used": "gemini_fs",
+        "latency_ms": 120,
+        "cost_cents": 0.1,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": None,
+    }
+    assert rr["fallback_scope"] == "none"
+
+
+def test_corpus_upload_result():
+    u: CorpusUploadResult = {
+        "corpus_id": "cor_x",
+        "operation_id": "op_y",
+        "status": "indexing",
+        "file_count": 3,
+        "started_at": "2026-04-15T13:00:00Z",
+    }
+    assert u["status"] == "indexing"
+
+
+def test_corpus_status_result():
+    s: CorpusStatusResult = {
+        "corpus_id": "cor_x",
+        "indexed": True,
+        "file_count": 3,
+        "indexed_file_count": 3,
+        "progress": 1.0,
+        "warnings": [],
+        "last_checked_at": "2026-04-15T13:01:00Z",
+    }
+    assert s["progress"] == 1.0
+
+
+def test_corpus_summary():
+    cs: CorpusSummary = {
+        "corpus_id": "cor_x",
+        "name": None,
+        "file_count": 3,
+        "indexed_file_count": 3,
+        "total_bytes": 1024,
+        "created_at": "2026-04-15T13:00:00Z",
+        "backend": "gemini_fs",
+    }
+    assert cs["backend"] == "gemini_fs"
+
+
+def test_corpus_delete_result():
+    d: CorpusDeleteResult = {"corpus_id": "cor_x", "deleted": True, "files_removed": 3}
+    assert d["deleted"] is True
