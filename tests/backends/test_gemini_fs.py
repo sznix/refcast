@@ -369,3 +369,56 @@ def test_normalize_citations_uri_fallback():
     a = GeminiFSBackend(api_key="g_test")
     cites = a._normalize_citations(grounding, corpus_id="cor_q", limit=10)
     assert cites[0]["source_url"] == "gemini://corpus/cor_q/chunk/0"
+
+
+# --- exception mapping ---
+
+
+def test_map_exception_empty_corpus():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("FAILED_PRECONDITION: store empty"))
+    assert err.code == RecoveryEnum.EMPTY_CORPUS
+    assert err.recovery_action == "user_action"
+
+
+def test_map_exception_not_found_404():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("HTTP 404 NOT_FOUND"))
+    assert err.code == RecoveryEnum.CORPUS_NOT_FOUND
+    assert err.recovery_action == "user_action"
+
+
+def test_map_exception_rate_limited_429():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("HTTP 429 RESOURCE_EXHAUSTED quota"))
+    assert err.code == RecoveryEnum.RATE_LIMITED
+    assert err.recovery_action == "retry"
+    assert err.retry_after_ms == 30000
+
+
+def test_map_exception_auth_invalid_401():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("HTTP 401 UNAUTHENTICATED"))
+    assert err.code == RecoveryEnum.AUTH_INVALID
+    assert err.recovery_action == "user_action"
+
+
+def test_map_exception_5xx_backend_unavailable():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("HTTP 503 service unavailable"))
+    assert err.code == RecoveryEnum.BACKEND_UNAVAILABLE
+    assert err.recovery_action == "fallback"
+
+
+def test_map_exception_default_unknown():
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("something weird"))
+    assert err.code == RecoveryEnum.UNKNOWN
+    assert err.recovery_action == "fallback"
+
+
+def test_map_exception_priority_empty_over_5xx():
+    """When error mentions both 'empty' and a 5xx-shaped phrase, EMPTY_CORPUS wins."""
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("HTTP 503 FAILED_PRECONDITION store empty"))
+    assert err.code == RecoveryEnum.EMPTY_CORPUS
