@@ -87,7 +87,36 @@ class ExaBackend:
         }
 
     def _normalize_citations(self, results: list[Any], limit: int) -> list[Citation]:
-        raise NotImplementedError
+        """Map Exa SDK Result objects to Citation TypedDicts.
+
+        Handles missing optional fields gracefully:
+        - ``author`` may be None for many web pages.
+        - ``published_date`` may be None.
+        - ``text`` may be None when the SDK is called without text retrieval.
+        """
+        out: list[Citation] = []
+        for result in results[:limit]:
+            text: str = getattr(result, "text", None) or ""
+            url: str = getattr(result, "url", "") or ""
+            title: str | None = getattr(result, "title", None)
+            score: float | None = getattr(result, "score", None)
+            published_date: str | None = getattr(result, "published_date", None)
+            author: str | None = getattr(result, "author", None)
+
+            out.append(
+                {
+                    "text": text,
+                    "source_url": url,
+                    "author": author,
+                    "date": published_date,
+                    "confidence": float(score) if score is not None else None,
+                    "backend_used": self.id,
+                    "raw": {
+                        "title": title,
+                    },
+                }
+            )
+        return out
 
     def _map_exception(self, e: Exception) -> BackendError:
         raise NotImplementedError
