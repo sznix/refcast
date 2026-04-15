@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from refcast.backends.base import BackendAdapter
+    from refcast.models import ResearchConstraints
 
 FallbackScope = Literal["none", "same", "broader", "different"]
+
+_DEFAULT_ORDER_WITH_CORPUS = ["gemini_fs", "exa"]
+_DEFAULT_ORDER_WEB_ONLY = ["exa"]
 
 
 def classify_scope_shift(
@@ -36,3 +43,36 @@ def classify_scope_shift(
     if primary == "exa" and served == "gemini_fs":
         return "different"
     return "different"
+
+
+def select_backends(
+    corpus_id: str | None,
+    constraints: ResearchConstraints | None,
+    registered: dict[str, BackendAdapter],
+) -> list[BackendAdapter]:
+    """Pick backend adapters in fallback order.
+
+    Rules:
+    - preferred_backend wins, others follow in default order
+    - corpus_id requires the "upload" capability (filters out web-only backends)
+    - returns [] if no eligible backends
+    """
+    c = constraints or {}
+    preferred = c.get("preferred_backend")
+
+    if preferred:
+        order = [preferred] + [b for b in _DEFAULT_ORDER_WITH_CORPUS if b != preferred]
+    elif corpus_id is not None:
+        order = list(_DEFAULT_ORDER_WITH_CORPUS)
+    else:
+        order = list(_DEFAULT_ORDER_WEB_ONLY)
+
+    out: list[BackendAdapter] = []
+    for backend_id in order:
+        adapter = registered.get(backend_id)
+        if adapter is None:
+            continue
+        if corpus_id is not None and "upload" not in adapter.capabilities:
+            continue
+        out.append(adapter)
+    return out

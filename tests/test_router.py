@@ -1,6 +1,8 @@
 """Tests for refcast.router.classify_scope_shift — table from spec §3.5."""
 
-from refcast.router import classify_scope_shift
+from unittest.mock import MagicMock
+
+from refcast.router import classify_scope_shift, select_backends
 
 
 def test_gemini_to_gemini_with_corpus_same():
@@ -93,3 +95,62 @@ def test_no_fallback_returns_none():
         )
         == "none"
     )
+
+
+# --- select_backends tests ---
+
+
+def _mk(id, caps):
+    m = MagicMock()
+    m.id = id
+    m.capabilities = frozenset(caps)
+    return m
+
+
+def test_select_backends_corpus_first():
+    g = _mk("gemini_fs", {"search", "upload", "cite"})
+    e = _mk("exa", {"search", "cite"})
+    chosen = select_backends(
+        corpus_id="cor_x", constraints=None, registered={"gemini_fs": g, "exa": e}
+    )
+    assert [b.id for b in chosen] == ["gemini_fs"]
+    # Exa is filtered because it lacks "upload" -> cannot serve a corpus query
+
+
+def test_select_backends_no_corpus_web_only():
+    g = _mk("gemini_fs", {"search", "upload", "cite"})
+    e = _mk("exa", {"search", "cite"})
+    chosen = select_backends(
+        corpus_id=None, constraints=None, registered={"gemini_fs": g, "exa": e}
+    )
+    assert [b.id for b in chosen] == ["exa"]
+
+
+def test_select_backends_preferred_overrides_default():
+    g = _mk("gemini_fs", {"search", "upload", "cite"})
+    e = _mk("exa", {"search", "cite"})
+    chosen = select_backends(
+        corpus_id=None,
+        constraints={"preferred_backend": "gemini_fs"},
+        registered={"gemini_fs": g, "exa": e},
+    )
+    # gemini_fs first by preference, exa next as fallback
+    assert [b.id for b in chosen] == ["gemini_fs", "exa"]
+
+
+def test_select_backends_skips_unregistered():
+    e = _mk("exa", {"search", "cite"})
+    chosen = select_backends(corpus_id=None, constraints=None, registered={"exa": e})
+    assert [b.id for b in chosen] == ["exa"]
+
+
+def test_select_backends_empty_registered_returns_empty():
+    chosen = select_backends(corpus_id=None, constraints=None, registered={})
+    assert chosen == []
+
+
+def test_select_backends_corpus_with_only_exa_returns_empty():
+    """Exa cannot serve corpus queries - no upload capability."""
+    e = _mk("exa", {"search", "cite"})
+    chosen = select_backends(corpus_id="cor_x", constraints=None, registered={"exa": e})
+    assert chosen == []
