@@ -22,6 +22,7 @@ def enforce_response_size(result: dict[str, Any]) -> dict[str, Any]:
     out = dict(result)
     citations = list(out.get("citations", []))
     warnings = list(out.get("warnings", []))
+    original_count = len(citations)
 
     while (
         citations
@@ -30,18 +31,19 @@ def enforce_response_size(result: dict[str, Any]) -> dict[str, Any]:
     ):
         citations.pop()
 
-    truncation_warning: StructuredError = {
-        "code": RecoveryEnum.UNKNOWN,
-        "message": "Response truncated at 25KB (citations dropped from tail).",
-        "recovery_hint": "Narrow the query or request fewer citations.",
-        "recovery_action": "user_action",
-        "fallback_used": False,
-        "partial_results": True,
-        "retry_after_ms": None,
-        "backend": out.get("backend_used"),
-        "raw": {},
-    }
-    warnings.append(truncation_warning)
+    if len(citations) < original_count:
+        truncation_warning: StructuredError = {
+            "code": RecoveryEnum.UNKNOWN,
+            "message": "Response truncated at 25KB (citations dropped from tail).",
+            "recovery_hint": "Narrow the query or request fewer citations.",
+            "recovery_action": "user_action",
+            "fallback_used": False,
+            "partial_results": True,
+            "retry_after_ms": None,
+            "backend": out.get("backend_used"),
+            "raw": {},
+        }
+        warnings.append(truncation_warning)
 
     out["citations"] = citations
     out["warnings"] = warnings

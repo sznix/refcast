@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -125,7 +126,7 @@ class ExaBackend:
         lower = text.lower()
 
         # Priority 1: rate limited — 429, "rate limit", or "rate_limited"
-        if "429" in text or "rate limit" in lower or "rate_limited" in lower:
+        if re.search(r"\b429\b", text) or "rate limit" in lower or "rate_limited" in lower:
             return BackendError(
                 RecoveryEnum.RATE_LIMITED,
                 text,
@@ -136,7 +137,7 @@ class ExaBackend:
             )
 
         # Priority 2: auth invalid — 401, "unauthorized", "invalid api key"
-        if "401" in text or "unauthorized" in lower or "invalid api key" in lower:
+        if re.search(r"\b401\b", text) or "unauthorized" in lower or "invalid api key" in lower:
             return BackendError(
                 RecoveryEnum.AUTH_INVALID,
                 text,
@@ -147,7 +148,7 @@ class ExaBackend:
 
         # Priority 3: server errors and network/timeout issues
         if (
-            any(code in text for code in ("500", "502", "503", "504"))
+            any(re.search(r"\b" + code + r"\b", text) for code in ("500", "502", "503", "504"))
             or "server error" in lower
             or "timeout" in lower
             or "connection" in lower

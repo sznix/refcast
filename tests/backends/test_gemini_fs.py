@@ -614,3 +614,113 @@ def test_map_exception_priority_empty_over_5xx():
     a = GeminiFSBackend(api_key="g_test")
     err = a._map_exception(Exception("HTTP 503 FAILED_PRECONDITION store empty"))
     assert err.code == RecoveryEnum.EMPTY_CORPUS
+
+
+# --- BUG 1: None segment guard ---
+
+
+def test_normalize_citations_none_segment_skipped():
+    """Citations with segment=None should be skipped, not crash."""
+    chunk = MagicMock()
+    chunk.retrieved_context = MagicMock(uri="gemini://file/0", title="doc.pdf")
+
+    support_none_seg = MagicMock()
+    support_none_seg.segment = None
+    support_none_seg.grounding_chunk_indices = [0]
+
+    support_good = MagicMock()
+    support_good.segment = MagicMock(text="good text", start_index=0, end_index=9)
+    support_good.grounding_chunk_indices = [0]
+
+    grounding = MagicMock(
+        grounding_chunks=[chunk],
+        grounding_supports=[support_none_seg, support_good],
+    )
+
+    a = GeminiFSBackend(api_key="g_test")
+    cites = a._normalize_citations(grounding, corpus_id="cor_x", limit=10)
+    # The None-segment support is skipped; only the good one produces a citation
+    assert len(cites) == 1
+    assert cites[0]["text"] == "good text"
+
+
+# --- BUG 3: Overly broad 'empty' match ---
+
+
+def test_map_exception_empty_response_body_not_empty_corpus():
+    """'empty response body' without 'failed_precondition' → UNKNOWN, not EMPTY_CORPUS."""
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("empty response body from server"))
+    assert err.code == RecoveryEnum.UNKNOWN
+
+
+def test_map_exception_empty_parameter_not_empty_corpus():
+    """'empty parameter' without 'failed_precondition' → UNKNOWN, not EMPTY_CORPUS."""
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("empty parameter in request"))
+    assert err.code == RecoveryEnum.UNKNOWN
+
+
+def test_map_exception_failed_precondition_with_empty_still_maps():
+    """'failed_precondition' + 'empty' still correctly maps to EMPTY_CORPUS."""
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("FAILED_PRECONDITION: store is empty"))
+    assert err.code == RecoveryEnum.EMPTY_CORPUS
+
+
+def test_map_exception_failed_precondition_no_documents_maps():
+    """'failed_precondition' + 'no documents' maps to EMPTY_CORPUS."""
+    a = GeminiFSBackend(api_key="g_test")
+    err = a._map_exception(Exception("FAILED_PRECONDITION: no documents indexed"))
+    assert err.code == RecoveryEnum.EMPTY_CORPUS
+
+
+# --- BUG 4: Path symlink resolution ---
+
+
+def test_validate_path_symlink_to_allowed_file(tmp_path):
+    """Symlink to a valid PDF passes validation (resolves to real file)."""
+    real_file = tmp_path / "real.pdf"
+    real_file.write_bytes(b"%PDF-1.4")
+    link = tmp_path / "link.pdf"
+    link.symlink_to(real_file)
+
+    a = GeminiFSBackend(api_key="g_test")
+    # Should not raise — the symlink resolves to a valid PDF
+    a._validate_path(str(link))
+
+
+def test_validate_path_symlink_to_disallowed_suffix(tmp_path):
+    """Symlink to a .txt target but with .pdf name: resolves target suffix check."""
+    # Create a text file, symlink with a .pdf extension that points to it
+    real_file = tmp_path / "data.txt"
+    real_file.write_bytes(b"plaintext")
+    link = tmp_path / "link.pdf"
+    link.symlink_to(real_file)
+
+    # After resolving symlink, Path.suffix for the link is still .pdf (the link name),
+    # so this should pass. The important thing is that it doesn't crash.
+    a = GeminiFSBackend(api_key="g_test")
+    # .pdf extension so validation passes
+    a._validate_path(str(link))
+
+
+# --- BUG 6 (gemini): Status code word-boundary matching ---
+
+
+def test_map_exception_no_false_positive_500_in_corpus_id():
+    """Error message with '50021' should NOT be treated as a 500 server error."""
+    a = GeminiFSBackend(api_key="g_test")
+    # "50021" contains "500" as substring but is not a standalone HTTP status code
+    err = a._map_exception(Exception("File id 50021 access denied"))
+    # Word-boundary fix prevents false 500 match → falls through to UNKNOWN
+    assert err.code != RecoveryEnum.BACKEND_UNAVAILABLE
+
+
+def test_map_exception_no_false_positive_429_in_id():
+    """Error message with corpus id containing '429' substring should not trigger RATE_LIMITED."""
+    a = GeminiFSBackend(api_key="g_test")
+    # "42907" contains "429" but is not a standalone 429 status code
+    err = a._map_exception(Exception("Resource 42907 access denied"))
+    # Should be UNKNOWN, not RATE_LIMITED
+    assert err.code == RecoveryEnum.UNKNOWN

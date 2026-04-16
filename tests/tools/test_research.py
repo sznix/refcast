@@ -377,3 +377,55 @@ async def test_research_deep_merges_and_deduplicates(
 
     # 2 sub-results had 1 citation each, but same URL + text[:100] => 1 merged
     assert len(result["citations"]) < 2
+
+
+# --- BUG 2: Deep mode all-errors propagation ---
+
+
+def _error_result(backend_id: str, error_code: str = "RATE_LIMITED") -> dict[str, Any]:
+    return {
+        "answer": "",
+        "citations": [],
+        "backend_used": backend_id,
+        "latency_ms": 10,
+        "cost_cents": 0.0,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": {
+            "code": error_code,
+            "message": f"Simulated {error_code} error",
+            "recovery_hint": "retry",
+            "recovery_action": "retry",
+            "fallback_used": False,
+            "partial_results": False,
+            "retry_after_ms": 30000,
+            "backend": backend_id,
+            "raw": {},
+        },
+    }
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_all_sub_queries_errored_propagates_error(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+) -> None:
+    """Deep mode: when ALL sub-queries return errors, the error is propagated — not masked."""
+    mock_perspectives.return_value = ["sq1", "sq2"]
+    mock_execute.side_effect = [
+        _error_result("exa", "RATE_LIMITED"),
+        _error_result("exa", "RATE_LIMITED"),
+    ]
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, {"depth": "deep"})
+
+    # Should propagate the real error, not silently return error=None
+    assert result.get("error") is not None, (
+        "Deep mode swallowed all sub-query errors — should have propagated the first error"
+    )

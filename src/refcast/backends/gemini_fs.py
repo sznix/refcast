@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -272,14 +273,15 @@ class GeminiFSBackend:
                 pass
 
     def _validate_path(self, path: str) -> None:
-        p = Path(path)
-        if not p.is_absolute():
+        raw = Path(path)
+        if not raw.is_absolute():
             raise BackendError(
                 RecoveryEnum.UNSUPPORTED_FORMAT,
                 f"Path must be absolute: {path}",
                 backend=self.id,
                 recovery_action="user_action",
             )
+        p = raw.resolve()
         if not p.exists():
             raise BackendError(
                 RecoveryEnum.UNSUPPORTED_FORMAT,
@@ -452,6 +454,8 @@ class GeminiFSBackend:
             title = getattr(ctx, "title", None) if ctx is not None else None
             source_url = uri or f"gemini://corpus/{corpus_id or 'unknown'}/chunk/{idx}"
             seg = support.segment
+            if seg is None:
+                continue
             out.append(
                 {
                     "text": seg.text,
@@ -473,8 +477,8 @@ class GeminiFSBackend:
         text = str(e)
         lower = text.lower()
 
-        # Priority 1: empty corpus (FAILED_PRECONDITION / 'empty')
-        if "failed_precondition" in lower or "empty" in lower:
+        # Priority 1: empty corpus — requires 'failed_precondition' AND ('empty' or 'no documents')
+        if "failed_precondition" in lower and ("empty" in lower or "no documents" in lower):
             return BackendError(
                 RecoveryEnum.EMPTY_CORPUS,
                 text,
@@ -483,7 +487,7 @@ class GeminiFSBackend:
                 raw={"original": text},
             )
         # Priority 2: not found
-        if "not_found" in lower or "404" in text:
+        if "not_found" in lower or re.search(r"\b404\b", text):
             return BackendError(
                 RecoveryEnum.CORPUS_NOT_FOUND,
                 text,
@@ -492,7 +496,7 @@ class GeminiFSBackend:
                 raw={"original": text},
             )
         # Priority 3: rate limited / quota
-        if "429" in text or "resource_exhausted" in lower or "quota" in lower:
+        if re.search(r"\b429\b", text) or "resource_exhausted" in lower or "quota" in lower:
             return BackendError(
                 RecoveryEnum.RATE_LIMITED,
                 text,
@@ -502,7 +506,7 @@ class GeminiFSBackend:
                 raw={"original": text},
             )
         # Priority 4: auth invalid
-        if "401" in text or "unauthenticated" in lower or "unauthorized" in lower:
+        if re.search(r"\b401\b", text) or "unauthenticated" in lower or "unauthorized" in lower:
             return BackendError(
                 RecoveryEnum.AUTH_INVALID,
                 text,
@@ -511,7 +515,10 @@ class GeminiFSBackend:
                 raw={"original": text},
             )
         # Priority 5: 5xx / network
-        if any(code in text for code in ("500", "502", "503", "504")) or "timeout" in lower:
+        if (
+            any(re.search(r"\b" + code + r"\b", text) for code in ("500", "502", "503", "504"))
+            or "timeout" in lower
+        ):
             return BackendError(
                 RecoveryEnum.BACKEND_UNAVAILABLE,
                 text,

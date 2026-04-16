@@ -184,16 +184,20 @@ async def _deep_research(
         sub_results.append(dict(r))
         all_warnings.extend(r.get("warnings") or [])
 
-    # 3. Merge citations (deduplicate by URL + text prefix)
+    # 3. Propagate error when ALL sub-queries failed (don't mask real failures)
+    if sub_results and all(r.get("error") is not None for r in sub_results):
+        return sub_results[0]  # propagate the first real error
+
+    # 4. Merge citations (deduplicate by URL + text prefix)
     merged = merge_citations(sub_results)  # type: ignore[arg-type]
 
-    # 4. Synthesize from merged set using ORIGINAL query
+    # 5. Synthesize from merged set using ORIGINAL query
     if merged:
         synth_answer, synth_cost, synth_ms = await synthesize(query, merged, gemini_api_key)
     else:
         synth_answer, synth_cost, synth_ms = "No relevant sources found.", 0.0, 0
 
-    # 5. Build final result
+    # 6. Build final result
     total_cost = sum(r["cost_cents"] for r in sub_results) + synth_cost
     total_latency = sum(r["latency_ms"] for r in sub_results) + synth_ms
     backend_names = {r["backend_used"] for r in sub_results if r["backend_used"]}

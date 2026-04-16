@@ -289,3 +289,23 @@ async def test_execute_maps_sdk_exception_to_backend_error():
         with pytest.raises(BackendError) as exc:
             await a.execute(query="q", corpus_id=None, constraints=None)
         assert exc.value.code == RecoveryEnum.RATE_LIMITED
+
+
+# --- BUG 6 (exa): Status code word-boundary matching ---
+
+
+def test_map_exception_no_false_positive_500_in_id():
+    """'File id 50021 not found' — '500' is a substring, should NOT match as 500 server error."""
+    a = ExaBackend(api_key="exa_test")
+    err = a._map_exception(Exception("File id 50021 not found"))
+    # "50021" contains "500" but is not a standalone status code
+    # Does not match timeout/server error/connection → UNKNOWN
+    assert err.code == RecoveryEnum.UNKNOWN
+
+
+def test_map_exception_no_false_positive_429_in_corpus_id():
+    """Error with '42907' in corpus name should NOT trigger RATE_LIMITED."""
+    a = ExaBackend(api_key="exa_test")
+    err = a._map_exception(Exception("Corpus 42907abc access failed"))
+    # "42907abc" contains "429" as substring — must not trigger RATE_LIMITED
+    assert err.code == RecoveryEnum.UNKNOWN

@@ -88,3 +88,33 @@ def test_over_limit_preserves_existing_warnings() -> None:
     assert len(out["warnings"]) == 2
     assert out["warnings"][0]["message"] == "pre-existing"
     assert out["warnings"][1]["code"] == RecoveryEnum.UNKNOWN
+
+
+# --- BUG 5: Size guard false truncation warning ---
+
+
+def test_over_limit_zero_citations_no_false_truncation_warning() -> None:
+    """When payload > 25KB but has 0 citations, the 'citations dropped' warning must NOT appear."""
+    # Build a result with a large answer but no citations
+    large_answer = "x" * (RESPONSE_SIZE_LIMIT_BYTES + 1000)
+    result = {
+        "answer": large_answer,
+        "citations": [],
+        "backend_used": "exa",
+        "latency_ms": 100,
+        "cost_cents": 0.7,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": None,
+    }
+    assert len(json.dumps(result, default=str).encode("utf-8")) > RESPONSE_SIZE_LIMIT_BYTES
+
+    out = enforce_response_size(result)
+
+    # No citations were dropped — the truncation warning must not appear
+    truncation_messages = [
+        w for w in out.get("warnings", []) if "citations dropped" in w.get("message", "").lower()
+    ]
+    assert truncation_messages == [], (
+        "Size guard appended a 'citations dropped' warning when 0 citations existed"
+    )
