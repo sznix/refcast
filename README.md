@@ -22,22 +22,20 @@ Every NotebookLM MCP breaks every 7-14 days when Google rotates cookies. Your ag
 
 **refcast doesn't fight this. It routes around it.**
 
-```
-Your agent                refcast                     Backends
-   |                         |                           |
-   |  research("What is     |                           |
-   |   quantum computing?") |                           |
-   |----------------------->|  try Gemini File Search   |
-   |                        |-------------------------->| 503 Service
-   |                        |                           | Unavailable
-   |                        |  fallback to Exa          |
-   |                        |-------------------------->| 200 OK
-   |                        |                           |
-   |  { answer, citations,  |  normalize + return       |
-   |    backend_used: "exa", |<--------------------------|
-   |    fallback_scope:      |                           |
-   |      "broader" }       |                           |
-   |<-----------------------|                           |
+```mermaid
+sequenceDiagram
+    participant Agent as Your agent
+    participant R as refcast
+    participant G as Gemini File Search
+    participant E as Exa
+
+    Agent->>R: research("quantum computing")
+    R->>G: query corpus
+    G--xR: 503 Service Unavailable
+    Note over R: fallback triggered
+    R->>E: search web
+    E-->>R: 200 OK + citations
+    R-->>Agent: { answer, citations, backend_used: "exa", fallback_scope: "broader" }
 ```
 
 Your agent's code never changes. Citations come back in the same shape. The `fallback_scope` field tells you what happened.
@@ -223,33 +221,21 @@ This tells your agent whether it should trust the answer as-is, or ask again wit
 
 ## Architecture
 
-```
-                          refcast
-  ┌────────────────────────────────────────────────────┐
-  │                                                    │
-  │  ┌──────────────┐  ┌───────────────────────────┐   │
-  │  │ corpus.*     │  │ research                  │   │
-  │  │ (4 tools)    │  │ (1 tool)                  │   │
-  │  └──────┬───────┘  └────────────┬──────────────┘   │
-  │         │                       │                  │
-  │         └───────────┬───────────┘                  │
-  │                     ▼                              │
-  │  ┌──────────────────────────────────────────────┐  │
-  │  │  Serial Fallback Router                      │  │
-  │  │  ┌────────────────────────────────────────┐  │  │
-  │  │  │ select_backends() → classify_scope()   │  │  │
-  │  │  │ 25KB response cap · error taxonomy     │  │  │
-  │  │  └────────────────────────────────────────┘  │  │
-  │  └──────────┬──────────────────────┬────────────┘  │
-  │             ▼                      ▼               │
-  │  ┌──────────────────┐  ┌──────────────────┐        │
-  │  │  Gemini File     │  │  Exa             │        │
-  │  │  Search          │  │  Search          │        │
-  │  │  (corpus + web)  │  │  (web)           │        │
-  │  └──────────────────┘  └──────────────────┘        │
-  │                                                    │
-  │  Want to add a backend? Implement one Protocol.     │
-  └────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph refcast
+        A[corpus.upload / status / list / delete] --> C
+        B[research] --> C
+        C[Serial Fallback Router<br/>select_backends → classify_scope<br/>25KB cap · structured errors]
+        C --> D[Gemini File Search<br/>corpus + web]
+        C --> E[Exa Search<br/>web]
+    end
+    D -.-> F([Your documents])
+    E -.-> G([The web])
+
+    style C fill:#2d333b,stroke:#8B5CF6,color:#fff
+    style D fill:#2d333b,stroke:#4285f4,color:#fff
+    style E fill:#2d333b,stroke:#FF6B35,color:#fff
 ```
 
 **Adding a backend is one file.** Every backend implements the same simple Protocol (3 methods). Want to plug in Perplexity, SurfSense, or your own RAG? Write one Python file and you're done.
