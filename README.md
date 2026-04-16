@@ -4,7 +4,7 @@
 
 **Cast once. Cite anywhere.**
 
-One MCP tool that brokers research across multiple backends — when one fails, the next picks up seamlessly, returning citations in the same shape every time.
+An open-source MCP server for AI agents that brokers research across multiple backends — when one fails, the next picks up seamlessly, returning citations in the same shape every time. Works with Claude Code, Cursor, Gemini CLI, and any MCP-compatible client.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
@@ -45,27 +45,43 @@ Your agent's code never changes. Citations come back in the same shape. The `fal
 ## Install
 
 ```bash
-uv tool install refcast          # recommended
-pipx install refcast             # alternative
-pip install refcast              # also works
+# From PyPI (available after v0.1.0 release)
+uv tool install refcast
+pipx install refcast
+pip install refcast
+
+# From source (available now)
+pip install git+https://github.com/sznix/refcast.git
 ```
 
 ## Setup (2 minutes)
 
+You need **at least one** API key. Both have free tiers (no credit card required):
+
+| Backend | Free tier | Get key |
+|:--------|:----------|:--------|
+| Gemini File Search | ~1,500 req/day | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Exa web search | 1,000 searches/month | [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) |
+
+> refcast works with **just one key** — if you only have Gemini, it uses Gemini. If you only have Exa, it uses Exa. Both = full fallback resilience.
+
 ```bash
-# 1. Get free API keys:
-#    Gemini  → https://aistudio.google.com/apikey
-#    Exa     → https://dashboard.exa.ai/api-keys
+# Option A: macOS / Windows (secure keychain storage)
+refcast auth --store keyring
 
-# 2. Store them securely
-refcast auth --store keyring     # macOS Keychain / Windows Credential Locker
+# Option B: Environment variables (works everywhere including Linux/Docker)
+export GEMINI_API_KEY="your-key-here"
+export EXA_API_KEY="your-key-here"
 
-# 3. Verify
+# Option C: .env file
+refcast init                     # creates .env.example
+cp .env.example .env             # copy template
+# edit .env with your keys
+
+# Verify setup
 refcast doctor
 # Gemini: configured
 # Exa:    configured
-
-# 4. Add to your MCP client
 ```
 
 <details>
@@ -314,3 +330,13 @@ pytest -m integration -q           # real calls, needs GEMINI_API_KEY + EXA_API_
 ## License
 
 [MIT](LICENSE) &copy; 2026 sznix
+
+---
+
+<div align="center">
+
+**Built for the agentic research era.** AI agents need reliable, citation-backed research tools that don't break when a provider changes their API. refcast is that tool.
+
+[Report a bug](https://github.com/sznix/refcast/issues) &middot; [Request a feature](https://github.com/sznix/refcast/issues)
+
+</div>
