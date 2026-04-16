@@ -241,3 +241,139 @@ async def test_research_no_api_key_skips_synthesis(
     result = await fn("question", None, None)
 
     assert result["answer"] == "raw answer"
+
+
+# --- Task 7: depth="deep" mode ---
+
+
+def _ok_result_with_url(backend_id: str, answer: str, url: str) -> dict[str, Any]:
+    return {
+        "answer": answer,
+        "citations": [
+            {
+                "text": f"snippet from {url}",
+                "source_url": url,
+                "author": None,
+                "date": None,
+                "confidence": 0.9,
+                "backend_used": backend_id,
+                "raw": {},
+            }
+        ],
+        "backend_used": backend_id,
+        "latency_ms": 50,
+        "cost_cents": 0.1,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_fires_multiple_queries(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Deep mode: perspectives generate 3 sub-queries, each runs execute_research."""
+    mock_perspectives.return_value = ["sq1", "sq2", "sq3"]
+    mock_execute.side_effect = [
+        _ok_result_with_url("exa", "a1", "https://a.com"),
+        _ok_result_with_url("exa", "a2", "https://b.com"),
+        _ok_result_with_url("exa", "a3", "https://c.com"),
+    ]
+    mock_synth.return_value = ("Deep [1] answer [2] [3].", 0.08, 200)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("original question", None, {"depth": "deep"})
+
+    assert mock_execute.await_count == 3
+    assert "[1]" in result["answer"]
+    assert len(result["citations"]) == 3
+    # Cost = 3 * 0.1 + 0.08 = 0.38
+    assert result["cost_cents"] == round(3 * 0.1 + 0.08, 4)
+    # Latency = 3 * 50 + 200 = 350
+    assert result["latency_ms"] == 3 * 50 + 200
+    # Synthesis called with ORIGINAL query, not sub-queries
+    mock_synth.assert_awaited_once()
+    synth_call_query = mock_synth.call_args[0][0]
+    assert synth_call_query == "original question"
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_perspective_failure_degrades(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Deep mode: perspective failure returns [original_query], so only 1 call."""
+    mock_perspectives.return_value = ["original question"]
+    mock_execute.return_value = _ok_result("exa", answer="raw")
+    mock_synth.return_value = ("Synthesized.", 0.02, 50)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("original question", None, {"depth": "deep"})
+
+    assert mock_execute.await_count == 1
+    assert result["error"] is None
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+async def test_research_deep_no_api_key_falls_back_to_quick(
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """No Gemini key with depth=deep: degrades to quick mode."""
+    mock_execute.return_value = _ok_result("exa", answer="quick answer")
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})  # no gemini_api_key
+    fn = captured["research"]
+    result = await fn("question", None, {"depth": "deep"})
+
+    # Should fall through to quick mode since no API key
+    assert mock_execute.await_count == 1
+    assert result["answer"] == "quick answer"
+    mock_synth.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_merges_and_deduplicates(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Deep mode: overlapping citations from 2 sub-results get deduplicated."""
+    mock_perspectives.return_value = ["sq1", "sq2"]
+    # Both sub-results have a citation from the same URL with same text prefix
+    r1 = _ok_result_with_url("exa", "a1", "https://shared.com")
+    r2 = _ok_result_with_url("exa", "a2", "https://shared.com")
+    mock_execute.side_effect = [r1, r2]
+    mock_synth.return_value = ("Merged [1].", 0.02, 50)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, {"depth": "deep"})
+
+    # 2 sub-results had 1 citation each, but same URL + text[:100] => 1 merged
+    assert len(result["citations"]) < 2
