@@ -19,9 +19,10 @@ from refcast.tools import (
 )
 
 
-def _register_backends() -> dict[str, BackendAdapter]:
+def _register_backends() -> tuple[dict[str, BackendAdapter], str | None]:
     cfg = load_config(require_at_least_one=True)
     backends: dict[str, BackendAdapter] = {}
+    gemini_api_key: str | None = cfg.gemini_api_key
 
     if cfg.gemini_api_key:
         try:
@@ -35,18 +36,18 @@ def _register_backends() -> dict[str, BackendAdapter]:
         except BackendError as e:
             print(f"WARN: Exa backend disabled: {e.message}", file=sys.stderr)
 
-    return backends
+    return backends, gemini_api_key
 
 
 def build_server() -> FastMCP:
     mcp: FastMCP = FastMCP("refcast")
-    backends = _register_backends()
+    backends, gemini_api_key = _register_backends()
 
     corpus_upload.register(mcp, backends)
     corpus_status.register(mcp, backends)
     corpus_list.register(mcp, backends)
     corpus_delete.register(mcp, backends)
-    research.register(mcp, backends)
+    research.register(mcp, backends, gemini_api_key=gemini_api_key)
 
     return mcp
 

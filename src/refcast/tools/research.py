@@ -36,7 +36,13 @@ def _partial_index_warning(*, indexed: int, total: int, corpus_id: str | None) -
     }
 
 
-def register(mcp: FastMCP, backends: dict[str, BackendAdapter]) -> None:
+def register(
+    mcp: FastMCP,
+    backends: dict[str, BackendAdapter],
+    gemini_api_key: str | None = None,
+) -> None:
+    _gemini_api_key = gemini_api_key
+
     @mcp.tool(name="research")
     async def research(
         query: str,
