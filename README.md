@@ -1,6 +1,6 @@
 <div align="center">
 
-# refcast
+# Refcast
 
 **Cast once. Cite anywhere.**
 
