@@ -9,6 +9,7 @@ An open-source MCP server that sends your research queries to multiple backends 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![CI](https://github.com/sznix/refcast/actions/workflows/test.yml/badge.svg)](https://github.com/sznix/refcast/actions/workflows/test.yml)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-ready-D97706.svg?logo=anthropic&logoColor=white)](https://claude.ai/code)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6.svg)](https://modelcontextprotocol.io)
 [![fastmcp](https://img.shields.io/badge/built%20with-fastmcp%203.x-FF6B35.svg)](https://gofastmcp.com)
 
@@ -82,29 +83,31 @@ refcast doctor
 # Exa:    configured
 ```
 
-<details>
-<summary><b>Claude Code</b></summary>
+### Claude Code (recommended)
 
-Add to `~/.claude.json`:
+refcast was built and tested with [Claude Code](https://claude.ai/code). Setup is one JSON block:
 
 ```json
+// Add to ~/.claude.json under "mcpServers":
 {
-  "mcpServers": {
-    "refcast": {
-      "command": "refcast-mcp"
-    }
+  "refcast": {
+    "command": "refcast-mcp"
   }
 }
 ```
 
-Restart Claude Code. Tools appear as `mcp__refcast__*`.
+Restart Claude Code. Your tools appear as `mcp__refcast__*`. Try it:
 
-</details>
+```
+> Use refcast to research "what is retrieval augmented generation" with depth=deep
+```
+
+Claude will call `mcp__refcast__research`, get a synthesized answer with `[1]` `[2]` markers pointing to real sources, and use the citations in its response.
 
 <details>
-<summary><b>Cursor / Windsurf / Other MCP clients</b></summary>
+<summary><b>Cursor / Windsurf / Gemini CLI / Other MCP clients</b></summary>
 
-Register the server with command `refcast-mcp` (stdio transport). Consult your client's MCP configuration docs.
+Register the server with command `refcast-mcp` (stdio transport). Consult your client's MCP configuration docs. refcast works with any MCP-compatible client — Claude Code is just where we test it most.
 
 </details>
 
@@ -332,7 +335,7 @@ pytest -m integration -q           # real calls, needs GEMINI_API_KEY + EXA_API_
 
 <div align="center">
 
-**Your agent deserves research tools that don't break.** refcast gives you reliable, citation-backed answers that stay consistent even when providers change their APIs.
+**Your agent deserves research tools that don't break.** refcast gives you reliable, citation-backed answers that stay consistent even when providers change their APIs. Built with and for [Claude Code](https://claude.ai/code).
 
 [Report a bug](https://github.com/sznix/refcast/issues) &middot; [Request a feature](https://github.com/sznix/refcast/issues)
 
