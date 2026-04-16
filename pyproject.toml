@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "refcast"
 version = "0.1.0"
-description = "Portable research substrate — cast once, cite anywhere. MCP server brokering Gemini File Search and Exa with unified citations."
+description = "Cast once, cite anywhere. MCP server that queries multiple research backends and returns citations in one consistent shape."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

@@ -8,7 +8,7 @@ import typer
 
 from refcast.config import load_config
 
-app = typer.Typer(help="refcast — portable research substrate CLI", no_args_is_help=True)
+app = typer.Typer(help="refcast — multi-backend research with unified citations", no_args_is_help=True)
 
 ENV_EXAMPLE_CONTENT = """\
 # Copy to .env and fill in.

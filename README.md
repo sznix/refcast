@@ -4,7 +4,7 @@
 
 **Cast once. Cite anywhere.**
 
-An open-source MCP server for AI agents that brokers research across multiple backends — when one fails, the next picks up seamlessly, returning citations in the same shape every time. Works with Claude Code, Cursor, Gemini CLI, and any MCP-compatible client.
+An open-source MCP server that sends your research queries to multiple backends — if one goes down, the next one picks up automatically, and your citations come back in the same shape every time. Works with Claude Code, Cursor, Gemini CLI, and any MCP client.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
@@ -184,7 +184,7 @@ When things go wrong, your agent gets machine-actionable errors:
 }
 ```
 
-14 error codes. Every code has a defined `recovery_action`: **retry**, **fallback**, or **user_action**. Your agent can branch on these programmatically.
+14 error codes, each with a clear next step: **retry** (transient, try again), **fallback** (try another backend), or **user_action** (you need to fix something). Your agent can branch on these without guessing.
 
 <details>
 <summary><b>Full error taxonomy (14 codes)</b></summary>
@@ -208,7 +208,7 @@ When things go wrong, your agent gets machine-actionable errors:
 
 </details>
 
-### Deterministic fallback classification
+### Fallback tracking — what actually happened?
 
 When refcast falls back to a different backend, `fallback_scope` tells your agent exactly what happened:
 
@@ -219,7 +219,7 @@ When refcast falls back to a different backend, `fallback_scope` tells your agen
 | `broader` | Fallback widened scope (corpus -> web). |
 | `different` | Fallback served fundamentally different data. Treat with caution. |
 
-This is a **load-bearing signal for downstream agents** — it's how your LLM decides whether to trust the answer or re-prompt.
+This tells your agent whether it should trust the answer as-is, or ask again with more context.
 
 ## Architecture
 
@@ -248,11 +248,11 @@ This is a **load-bearing signal for downstream agents** — it's how your LLM de
   │  │  (corpus + web)  │  │  (web)           │        │
   │  └──────────────────┘  └──────────────────┘        │
   │                                                    │
-  │  BackendAdapter Protocol — implement to add more   │
+  │  Want to add a backend? Implement one Protocol.     │
   └────────────────────────────────────────────────────┘
 ```
 
-**Built on primitives, not monoliths.** Every backend implements one Protocol with 3 methods. Adding a new research backend (Perplexity, SurfSense, your own RAG) is one Python file.
+**Adding a backend is one file.** Every backend implements the same simple Protocol (3 methods). Want to plug in Perplexity, SurfSense, or your own RAG? Write one Python file and you're done.
 
 ## How it compares
 
@@ -267,7 +267,7 @@ This is a **load-bearing signal for downstream agents** — it's how your LLM de
 | Cost visibility per query | **Yes** | No | No |
 | Works when Google changes things | **Yes** | Breaks ~biweekly | Varies |
 
-> refcast and jacob-bd's tool are **complementary**, not competing. Use jacob-bd for your existing NotebookLM notebooks; use refcast for resilient, multi-backend research.
+> These tools work great together. Use jacob-bd to query your existing NotebookLM notebooks; use refcast when you want multi-backend research that doesn't break when Google rotates cookies.
 
 ## Cost
 
@@ -347,7 +347,7 @@ pytest -m integration -q           # real calls, needs GEMINI_API_KEY + EXA_API_
 
 <div align="center">
 
-**Built for the agentic research era.** AI agents need reliable, citation-backed research tools that don't break when a provider changes their API. refcast is that tool.
+**Your agent deserves research tools that don't break.** refcast gives you reliable, citation-backed answers that stay consistent even when providers change their APIs.
 
 [Report a bug](https://github.com/sznix/refcast/issues) &middot; [Request a feature](https://github.com/sznix/refcast/issues)
 
