@@ -43,8 +43,8 @@ def auth(
     """Interactively store API keys (in keyring or .env)."""
     import keyring  # noqa: PLC0415
 
-    gemini = typer.prompt("GEMINI_API_KEY", default="", show_default=False)
-    exa = typer.prompt("EXA_API_KEY", default="", show_default=False)
+    gemini = typer.prompt("GEMINI_API_KEY", default="", show_default=False, hide_input=True)
+    exa = typer.prompt("EXA_API_KEY", default="", show_default=False, hide_input=True)
 
     if not gemini and not exa:
         typer.echo("No keys provided.", err=True)

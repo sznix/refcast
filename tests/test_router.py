@@ -285,3 +285,20 @@ async def test_execute_research_no_backends_returns_error():
     assert result["error"] is not None
     assert result["error"]["code"] == RecoveryEnum.BACKEND_UNAVAILABLE
     assert result["error"]["recovery_action"] == "user_action"
+
+
+# --- Bug A: redact_raw applied to BackendError.raw in _be_to_struct ---
+
+
+def test_be_to_struct_redacts_raw_secrets():
+    from refcast.router import _be_to_struct
+
+    e = BackendError(
+        RecoveryEnum.UNKNOWN,
+        "err",
+        backend="x",
+        raw={"authorization": "Bearer secret123", "status": 500},
+    )
+    result = _be_to_struct(e, fallback_used=False)
+    assert result["raw"]["authorization"] == "[REDACTED]"
+    assert result["raw"]["status"] == 500

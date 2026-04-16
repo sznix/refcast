@@ -243,6 +243,32 @@ async def test_research_no_api_key_skips_synthesis(
     assert result["answer"] == "raw answer"
 
 
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+async def test_research_quick_zero_citations_keeps_raw_answer(
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Quick mode: when synthesis returns '' (0 citations), raw answer is preserved."""
+    raw = _ok_result("exa", answer="Good answer")
+    raw["citations"] = []
+    mock_execute.return_value = raw
+    mock_synth.return_value = ("", 0.0, 0)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, None)
+
+    assert result["answer"] == "Good answer", (
+        "synthesis returned '' for 0 citations — raw answer must not be overwritten"
+    )
+    assert result["cost_cents"] == 0.1  # synth cost NOT added (path not taken)
+    assert result["latency_ms"] == 50  # synth latency NOT added
+
+
 # --- Task 7: depth="deep" mode ---
 
 
