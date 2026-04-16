@@ -235,6 +235,12 @@ async def _deep_research(
     if sub_results and all(r.get("error") is not None for r in sub_results):
         return sub_results[0]  # propagate the first real error
 
+    # 3b. Convert partial sub-query errors into warnings so they surface
+    for partial_r in sub_results:
+        err = partial_r.get("error")
+        if err is not None:
+            all_warnings.append(err)
+
     # 4. Merge citations (deduplicate by URL + text prefix)
     merged = merge_citations(sub_results)  # type: ignore[arg-type]
 
@@ -243,6 +249,22 @@ async def _deep_research(
         synth_answer, synth_cost, synth_ms = await synthesize(query, merged, gemini_api_key)
     else:
         synth_answer, synth_cost, synth_ms = "No relevant sources found.", 0.0, 0
+
+    # 5b. Add synthesis failure warning in deep mode (mirrors quick mode behaviour)
+    if synth_answer is None:
+        all_warnings.append(
+            {
+                "code": RecoveryEnum.UNKNOWN,
+                "message": "Deep-mode synthesis skipped — using raw answer from first sub-query.",
+                "recovery_hint": "Retry later or check Gemini API key.",
+                "recovery_action": "retry",
+                "fallback_used": False,
+                "partial_results": True,
+                "retry_after_ms": None,
+                "backend": None,
+                "raw": {},
+            }
+        )
 
     # 6. Build final result
     total_cost = sum(r["cost_cents"] for r in sub_results) + synth_cost

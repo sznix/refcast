@@ -457,6 +457,68 @@ async def test_research_deep_all_sub_queries_errored_propagates_error(
     )
 
 
+# --- BUG 2 (round-2 audit): partial sub-query errors surfaced as warnings ---
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_partial_sub_query_error_becomes_warning(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Deep mode: 1 success + 1 failure — failed sub-query error must appear in warnings."""
+    mock_perspectives.return_value = ["sq1", "sq2"]
+    mock_execute.side_effect = [
+        _ok_result_with_url("exa", "good answer", "https://good.com"),
+        _error_result("exa", "rate_limited"),
+    ]
+    mock_synth.return_value = ("Synthesized.", 0.02, 50)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, {"depth": "deep"})
+
+    # Should succeed overall (one sub-query worked)
+    assert result.get("error") is None
+    # The failed sub-query error must appear as a warning
+    warning_codes = [w.get("code") for w in result.get("warnings", [])]
+    assert "rate_limited" in warning_codes, (
+        f"Failed sub-query error not surfaced in warnings. Got: {warning_codes}"
+    )
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+@patch("refcast.tools.research.generate_perspectives")
+async def test_research_deep_synthesis_failure_produces_warning(
+    mock_perspectives: AsyncMock,
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Deep mode: synthesis failure must append a warning (mirrors quick mode)."""
+    mock_perspectives.return_value = ["sq1"]
+    mock_execute.return_value = _ok_result_with_url("exa", "raw answer", "https://example.com")
+    mock_synth.return_value = (None, 0.0, 50)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, {"depth": "deep"})
+
+    assert result.get("error") is None
+    messages = [w.get("message", "") for w in result.get("warnings", [])]
+    assert any("deep-mode synthesis skipped" in m.lower() for m in messages), (
+        f"Deep-mode synthesis failure not surfaced in warnings. Got: {messages}"
+    )
+
+
 # --- BUG 4 (audit): max_citations validation ---
 
 

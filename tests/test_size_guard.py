@@ -118,3 +118,27 @@ def test_over_limit_zero_citations_no_false_truncation_warning() -> None:
     assert truncation_messages == [], (
         "Size guard appended a 'citations dropped' warning when 0 citations existed"
     )
+
+
+def test_answer_only_overflow_truncated_to_fit() -> None:
+    """BUG 3 fix: 30KB answer with 0 citations must be truncated until <= 25KB."""
+    large_answer = "A" * (30 * 1024)
+    result = {
+        "answer": large_answer,
+        "citations": [],
+        "backend_used": "exa",
+        "latency_ms": 100,
+        "cost_cents": 0.0,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": None,
+    }
+    assert len(json.dumps(result, default=str).encode("utf-8")) > RESPONSE_SIZE_LIMIT_BYTES
+
+    out = enforce_response_size(result)
+
+    final_size = len(json.dumps(out, default=str).encode("utf-8"))
+    assert final_size <= RESPONSE_SIZE_LIMIT_BYTES, (
+        f"Size guard failed to truncate answer-only payload: {final_size} bytes"
+    )
+    assert "truncated" in out["answer"]

@@ -160,6 +160,21 @@ def test_select_backends_corpus_with_only_exa_returns_empty():
     assert chosen == []
 
 
+def test_select_backends_invalid_preferred_ignored():
+    """BUG 4 fix: invalid preferred_backend must not bypass the upload-capability filter."""
+    e = _mk("exa", {"search", "cite"})
+    # "bogus" is not in registered — it must be treated as if preferred was None,
+    # meaning the upload-capability filter still applies and Exa is filtered out.
+    chosen = select_backends(
+        corpus_id="cor_x",
+        constraints={"preferred_backend": "bogus"},
+        registered={"exa": e},
+    )
+    assert chosen == [], (
+        "Invalid preferred_backend bypassed the upload filter — Exa should be excluded"
+    )
+
+
 # --- execute_research tests ---
 
 

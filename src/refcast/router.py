@@ -64,6 +64,11 @@ def select_backends(
     c = constraints or {}
     preferred = c.get("preferred_backend")
 
+    # Ignore invalid preferences — an unregistered backend name must not bypass
+    # the upload-capability filter that protects corpus-based queries.
+    if preferred and preferred not in registered:
+        preferred = None
+
     if preferred:
         order = [preferred] + [b for b in _DEFAULT_ORDER_WITH_CORPUS if b != preferred]
     elif corpus_id is not None:

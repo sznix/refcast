@@ -324,11 +324,21 @@ async def test_poll_status_failed_op_surfaces_partial_index_warning(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_poll_status_unknown_corpus_raises(tmp_path):
+async def test_poll_status_unknown_corpus_returns_optimistic():
+    """BUG 1 fix: corpus unknown to _states returns optimistic indexed=True (not CORPUS_NOT_FOUND).
+
+    After a process restart _states is empty even if the corpus exists on the server.
+    poll_status must not crash — it returns indexed=True with file_count=0 so the
+    caller can proceed and let the execute() call validate the corpus server-side.
+    """
     a = GeminiFSBackend(api_key="g_test")
-    with pytest.raises(BackendError) as exc:
-        await a.poll_status("cor_unknown")
-    assert exc.value.code == RecoveryEnum.CORPUS_NOT_FOUND
+    result = await a.poll_status("cor_unknown")
+    assert result["corpus_id"] == "cor_unknown"
+    assert result["indexed"] is True
+    assert result["file_count"] == 0
+    assert result["progress"] == 1.0
+    assert result["warnings"] == []
+    assert isinstance(result["last_checked_at"], str)
 
 
 # --- list_corpora ---
@@ -642,6 +652,31 @@ def test_normalize_citations_none_segment_skipped():
     # The None-segment support is skipped; only the good one produces a citation
     assert len(cites) == 1
     assert cites[0]["text"] == "good text"
+
+
+def test_normalize_citations_none_seg_text_skipped():
+    """BUG 5 fix: seg.text=None must be skipped — not crash on text[:100]."""
+    chunk = MagicMock()
+    chunk.retrieved_context = MagicMock(uri="gemini://file/0", title="doc.pdf")
+
+    support_none_text = MagicMock()
+    support_none_text.segment = MagicMock(text=None, start_index=0, end_index=5)
+    support_none_text.grounding_chunk_indices = [0]
+
+    support_good = MagicMock()
+    support_good.segment = MagicMock(text="real text", start_index=5, end_index=14)
+    support_good.grounding_chunk_indices = [0]
+
+    grounding = MagicMock(
+        grounding_chunks=[chunk],
+        grounding_supports=[support_none_text, support_good],
+    )
+
+    a = GeminiFSBackend(api_key="g_test")
+    cites = a._normalize_citations(grounding, corpus_id="cor_x", limit=10)
+    # None-text support skipped; only the good one surfaces
+    assert len(cites) == 1
+    assert cites[0]["text"] == "real text"
 
 
 # --- BUG 3: Overly broad 'empty' match ---

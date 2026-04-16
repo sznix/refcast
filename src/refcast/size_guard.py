@@ -47,4 +47,10 @@ def enforce_response_size(result: dict[str, Any]) -> dict[str, Any]:
 
     out["citations"] = citations
     out["warnings"] = warnings
+
+    # Last resort: if answer alone exceeds the limit (no/few citations to drop),
+    # truncate the answer text itself so the response always fits within 25KB.
+    while _serialized_size(out) > RESPONSE_SIZE_LIMIT_BYTES and len(out.get("answer", "")) > 100:
+        out["answer"] = out["answer"][: len(out["answer"]) // 2] + "... [truncated]"
+
     return out

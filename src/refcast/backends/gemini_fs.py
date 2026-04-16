@@ -135,12 +135,18 @@ class GeminiFSBackend:
     async def poll_status(self, corpus_id: str) -> CorpusStatusResult:
         rec = self._states.get(corpus_id)
         if rec is None:
-            raise BackendError(
-                RecoveryEnum.CORPUS_NOT_FOUND,
-                f"Unknown corpus: {corpus_id}",
-                backend=self.id,
-                recovery_action="user_action",
-            )
+            # Corpus may exist on the server from a prior process session.
+            # We have no local operation tracking for it, so return an optimistic
+            # "indexed" result rather than incorrectly raising CORPUS_NOT_FOUND.
+            return {
+                "corpus_id": corpus_id,
+                "indexed": True,
+                "file_count": 0,
+                "indexed_file_count": 0,
+                "progress": 1.0,
+                "warnings": [],
+                "last_checked_at": _dt.datetime.now(_dt.UTC).isoformat(),
+            }
         file_count: int = rec["file_count"]
         operations: list[Any] = rec.get("operations", [])
 
@@ -468,9 +474,12 @@ class GeminiFSBackend:
             seg = support.segment
             if seg is None:
                 continue
+            text = getattr(seg, "text", None) or ""
+            if not text:
+                continue  # skip citations with no text content
             out.append(
                 {
-                    "text": seg.text,
+                    "text": text,
                     "source_url": source_url,
                     "author": None,
                     "date": None,
