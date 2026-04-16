@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from refcast.backends.base import BackendError
-from refcast.models import RecoveryEnum, ResearchResult, StructuredError
+from refcast.models import RecoveryEnum, ResearchResult, StructuredError, redact_raw
 
 if TYPE_CHECKING:
     from refcast.backends.base import BackendAdapter
@@ -119,7 +119,7 @@ def _be_to_struct(e: BackendError, fallback_used: bool) -> StructuredError:
         partial_results=False,
         retry_after_ms=e.retry_after_ms,
         backend=e.backend,
-        raw=e.raw,
+        raw=redact_raw(e.raw),
     )
 
 
@@ -142,7 +142,7 @@ def _failed_result(
         partial_results=False,
         retry_after_ms=retry_after_ms,
         backend=backend,
-        raw=raw or {},
+        raw=redact_raw(raw or {}),
     )
     return ResearchResult(
         answer="",

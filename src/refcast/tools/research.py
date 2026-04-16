@@ -140,11 +140,11 @@ async def _quick_research(
         synth_answer, synth_cost, synth_ms = await synthesize(
             query, out["citations"], gemini_api_key
         )
-        if synth_answer is not None:
+        if synth_answer is not None and synth_answer != "":
             out["answer"] = synth_answer
             out["cost_cents"] = round(out["cost_cents"] + synth_cost, 4)
             out["latency_ms"] += synth_ms
-        else:
+        elif synth_answer is None:
             out["latency_ms"] += synth_ms
             synth_warnings: list[StructuredError] = list(out.get("warnings") or [])
             synth_warnings.append(
@@ -161,6 +161,7 @@ async def _quick_research(
                 }
             )
             out["warnings"] = synth_warnings
+        # else: synth_answer == "" (0 citations) — keep raw answer, don't overwrite
 
     return out
 
