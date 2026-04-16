@@ -1,7 +1,10 @@
-"""refcast CLI — init/auth/doctor commands."""
+"""refcast CLI — init/auth/doctor/monitor commands."""
 
 from __future__ import annotations
 
+import platform
+import shutil
+import subprocess
 from pathlib import Path
 
 import typer
@@ -90,3 +93,282 @@ def doctor() -> None:
         raise typer.Exit(code=1)
     typer.echo("\nNext: register the MCP server in your client config:")
     typer.echo('  "mcpServers": {"refcast": {"command": "refcast-mcp"}}')
+
+
+# ─── Monitor ────────────────────────────────────────────
+
+
+_MONITOR_SCRIPT = """\
+#!/usr/bin/env bash
+# refcast auth monitor — checks NotebookLM cookie health daily.
+# Installed by: refcast monitor install
+set -euo pipefail
+
+NLM="{nlm_path}"
+LOG="{log_path}"
+TIMESTAMP=$(date "+%Y-%m-%dT%H:%M:%S")
+
+mkdir -p "$(dirname "$LOG")"
+
+if "$NLM" login --check > /dev/null 2>&1; then
+    echo "$TIMESTAMP OK" >> "$LOG"
+else
+    echo "$TIMESTAMP EXPIRED" >> "$LOG"
+    {notify_cmd}
+fi
+
+# Trim log to last 100 lines
+if [ -f "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 100 ]; then
+    tail -50 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+"""
+
+_PLIST_TEMPLATE = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.refcast.auth-monitor</string>
+    <key>Program</key>
+    <string>{script_path}</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>{hour}</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+</dict>
+</plist>
+"""
+
+
+def _find_nlm() -> str | None:
+    """Find the nlm binary path."""
+    return shutil.which("nlm")
+
+
+def _monitor_paths() -> dict[str, Path]:
+    """Return platform-appropriate paths for monitor files."""
+    home = Path.home()
+    return {
+        "script": home / ".local" / "bin" / "refcast-auth-monitor.sh",
+        "log": home / ".local" / "share" / "refcast-auth-monitor.log",
+        "plist": home / "Library" / "LaunchAgents" / "com.refcast.auth-monitor.plist",
+    }
+
+
+@app.command()
+def monitor(
+    action: str = typer.Argument(..., help="install | status | remove"),
+    hour: int = typer.Option(9, "--hour", help="Hour of day to check (0-23)"),
+) -> None:
+    """Set up daily NotebookLM cookie monitoring with notifications.
+
+    Checks if your NotebookLM cookies are still valid once a day.
+    If expired, sends a system notification so you can re-auth before
+    your agent hits a cookie error mid-workflow.
+
+    Requires 'nlm' CLI (notebooklm-mcp-cli) to be installed.
+    """
+    if action == "install":
+        _monitor_install(hour)
+    elif action == "status":
+        _monitor_status()
+    elif action == "remove":
+        _monitor_remove()
+    else:
+        typer.echo(f"Unknown action: {action}. Use: install, status, or remove", err=True)
+        raise typer.Exit(code=1)
+
+
+def _monitor_install(hour: int) -> None:
+    nlm = _find_nlm()
+    if not nlm:
+        typer.echo(
+            "'nlm' not found. Install it first: uv tool install notebooklm-mcp-cli", err=True
+        )
+        raise typer.Exit(code=1)
+
+    paths = _monitor_paths()
+    is_mac = platform.system() == "Darwin"
+
+    # Build notification command per platform
+    if is_mac:
+        notify = (
+            "/usr/bin/osascript -e "
+            '\'display notification "Run: nlm login" '
+            'with title "NotebookLM cookies expired" '
+            'sound name "Ping"\' 2>/dev/null || true'
+        )
+    else:
+        # Linux: try notify-send, fall back to echo
+        notify = (
+            'notify-send "NotebookLM cookies expired" '
+            '"Run: nlm login" 2>/dev/null || '
+            'echo "ALERT: NotebookLM cookies expired — run: nlm login"'
+        )
+
+    # Write the check script
+    script_content = _MONITOR_SCRIPT.format(
+        nlm_path=nlm,
+        log_path=str(paths["log"]),
+        notify_cmd=notify,
+    )
+    paths["script"].parent.mkdir(parents=True, exist_ok=True)
+    paths["script"].write_text(script_content)
+    paths["script"].chmod(0o755)
+    typer.echo(f"  Script: {paths['script']}")
+
+    # Install the scheduler
+    if is_mac:
+        plist = _PLIST_TEMPLATE.format(
+            script_path=str(paths["script"]),
+            log_path=str(paths["log"]),
+            hour=hour,
+        )
+        paths["plist"].parent.mkdir(parents=True, exist_ok=True)
+        paths["plist"].write_text(plist)
+
+        # Unload first if already loaded (ignore errors)
+        subprocess.run(
+            ["launchctl", "unload", str(paths["plist"])],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["launchctl", "load", str(paths["plist"])],
+            check=True,
+            capture_output=True,
+        )
+        typer.echo(f"  Scheduler: macOS LaunchAgent (daily at {hour}:00)")
+        typer.echo(f"  Plist: {paths['plist']}")
+    else:
+        # Linux: install crontab entry
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+        existing = result.stdout if result.returncode == 0 else ""
+        marker = "# refcast-auth-monitor"
+
+        if marker in existing:
+            typer.echo("  Cron entry already exists — skipping.")
+        else:
+            new_cron = existing.rstrip() + (f"\n{marker}\n0 {hour} * * * {paths['script']}\n")
+            subprocess.run(
+                ["crontab", "-"],
+                input=new_cron,
+                text=True,
+                check=True,
+            )
+            typer.echo(f"  Scheduler: cron (daily at {hour}:00)")
+
+    typer.echo(f"  Log: {paths['log']}")
+    typer.echo()
+    typer.echo("Done. You'll get a notification when cookies expire.")
+    typer.echo("Check status anytime: refcast monitor status")
+    typer.echo("Remove: refcast monitor remove")
+
+
+def _monitor_status() -> None:
+    paths = _monitor_paths()
+
+    typer.echo("=== refcast auth monitor ===")
+
+    # Check script exists
+    if paths["script"].exists():
+        typer.echo(f"  Script: installed ({paths['script']})")
+    else:
+        typer.echo("  Script: NOT installed. Run: refcast monitor install")
+        raise typer.Exit(code=1)
+
+    # Check scheduler
+    is_mac = platform.system() == "Darwin"
+    if is_mac:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True,
+            text=True,
+        )
+        if "com.refcast.auth-monitor" in result.stdout:
+            typer.echo("  Scheduler: active (macOS LaunchAgent)")
+        else:
+            typer.echo("  Scheduler: NOT loaded")
+    else:
+        result = subprocess.run(
+            ["crontab", "-l"],
+            capture_output=True,
+            text=True,
+        )
+        if "refcast-auth-monitor" in result.stdout:
+            typer.echo("  Scheduler: active (cron)")
+        else:
+            typer.echo("  Scheduler: NOT installed")
+
+    # Check log
+    if paths["log"].exists():
+        lines = paths["log"].read_text().strip().splitlines()
+        typer.echo(f"  Log: {len(lines)} entries")
+        if lines:
+            last = lines[-1]
+            typer.echo(f"  Last check: {last}")
+    else:
+        typer.echo("  Log: no checks yet")
+
+    # Check nlm auth
+    nlm = _find_nlm()
+    if nlm:
+        result = subprocess.run(
+            [nlm, "login", "--check"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            typer.echo("  Cookies: valid")
+        else:
+            typer.echo("  Cookies: EXPIRED — run: nlm login")
+    else:
+        typer.echo("  nlm: not found")
+
+
+def _monitor_remove() -> None:
+    paths = _monitor_paths()
+    is_mac = platform.system() == "Darwin"
+
+    # Remove scheduler
+    if is_mac and paths["plist"].exists():
+        subprocess.run(
+            ["launchctl", "unload", str(paths["plist"])],
+            capture_output=True,
+        )
+        paths["plist"].unlink()
+        typer.echo("  LaunchAgent: removed")
+    elif not is_mac:
+        result = subprocess.run(
+            ["crontab", "-l"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and "refcast-auth-monitor" in result.stdout:
+            lines = result.stdout.splitlines()
+            cleaned = [ln for ln in lines if "refcast-auth-monitor" not in ln]
+            subprocess.run(
+                ["crontab", "-"],
+                input="\n".join(cleaned) + "\n",
+                text=True,
+            )
+            typer.echo("  Cron entry: removed")
+
+    # Remove script
+    if paths["script"].exists():
+        paths["script"].unlink()
+        typer.echo("  Script: removed")
+
+    # Keep log (user's data)
+    if paths["log"].exists():
+        typer.echo(f"  Log kept: {paths['log']}")
+
+    typer.echo("  Monitor removed. No more daily checks.")
