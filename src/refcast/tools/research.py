@@ -8,6 +8,7 @@ from refcast.backends.base import BackendError
 from refcast.models import RecoveryEnum, ResearchConstraints, StructuredError
 from refcast.router import execute_research
 from refcast.size_guard import enforce_response_size
+from refcast.synthesizer import synthesize
 from refcast.tools._utils import err_from_backend
 
 if TYPE_CHECKING:
@@ -103,6 +104,34 @@ def register(
         )
         result = await execute_research(query, corpus_id, typed_constraints, backends)
         out: dict[str, Any] = dict(result)
+
+        # Synthesize answer (runs for both quick and deep modes)
+        if _gemini_api_key and out.get("error") is None:
+            synth_answer, synth_cost, synth_ms = await synthesize(
+                query, out["citations"], _gemini_api_key
+            )
+            if synth_answer is not None:
+                out["answer"] = synth_answer
+                out["cost_cents"] = round(out["cost_cents"] + synth_cost, 4)
+                out["latency_ms"] += synth_ms
+            else:
+                # Synthesis failed — keep raw answer, add warning
+                out["latency_ms"] += synth_ms
+                synth_warnings: list[StructuredError] = list(out.get("warnings") or [])
+                synth_warnings.append(
+                    {
+                        "code": RecoveryEnum.UNKNOWN,
+                        "message": "Answer synthesis skipped — using raw backend response.",
+                        "recovery_hint": "Retry later or check Gemini API key.",
+                        "recovery_action": "retry",
+                        "fallback_used": False,
+                        "partial_results": True,
+                        "retry_after_ms": None,
+                        "backend": None,
+                        "raw": {},
+                    }
+                )
+                out["warnings"] = synth_warnings
 
         if partial_warning is not None:
             existing_warnings = out.get("warnings") or []

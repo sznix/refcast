@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -172,3 +172,72 @@ async def test_research_applies_size_guard() -> None:
     assert len(result["citations"]) < 100
     # Truncation warning appended
     assert any(w.get("code") == RecoveryEnum.UNKNOWN for w in result["warnings"])
+
+
+# --- Task 6: Synthesis in quick mode ---
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+async def test_research_quick_synthesizes_answer(
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Quick mode: synthesize replaces raw answer with [1][2] markers."""
+    raw = _ok_result("exa", answer="raw answer")
+    mock_execute.return_value = raw
+    mock_synth.return_value = ("Synthesized [1] answer [2].", 0.05, 100)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, None)
+
+    assert "[1]" in result["answer"]
+    assert result["answer"] == "Synthesized [1] answer [2]."
+    assert result["cost_cents"] == round(0.1 + 0.05, 4)
+    assert result["latency_ms"] == 50 + 100
+    mock_synth.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+async def test_research_quick_synthesis_failure_uses_raw(
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Quick mode: if synthesis fails, raw answer is kept + warning added."""
+    raw = _ok_result("exa", answer="raw answer")
+    mock_execute.return_value = raw
+    mock_synth.return_value = (None, 0.0, 50)
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa}, gemini_api_key="fake_key")
+    fn = captured["research"]
+    result = await fn("question", None, None)
+
+    assert result["answer"] == "raw answer"
+    messages = [w.get("message", "") for w in result["warnings"]]
+    assert any("synthesis skipped" in m.lower() for m in messages)
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_no_api_key_skips_synthesis(
+    mock_execute: AsyncMock,
+) -> None:
+    """No gemini_api_key: synthesis never runs, raw answer returned."""
+    raw = _ok_result("exa", answer="raw answer")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})  # no gemini_api_key
+    fn = captured["research"]
+    result = await fn("question", None, None)
+
+    assert result["answer"] == "raw answer"
