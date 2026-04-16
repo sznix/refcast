@@ -1,6 +1,8 @@
 """Tests for Gemini File Search adapter."""
 
 import asyncio
+import datetime as _dt
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -51,6 +53,105 @@ def _mk_response(answer_text, citations_count, input_tokens=42, output_tokens=18
     return response
 
 
+def _mk_upload_operation(name: str, done: bool = False, error=None) -> MagicMock:
+    """Build a fake UploadToFileSearchStoreOperation."""
+    op = MagicMock()
+    op.name = name
+    op.done = done
+    op.error = error
+    op.response = None
+    op.metadata = None
+    return op
+
+
+def _mk_store(
+    name: str = "fileSearchStores/test123",
+    display_name: str | None = "refcast-test",
+    active: int | None = None,
+    pending: int | None = None,
+    failed: int | None = None,
+    size_bytes: int | None = None,
+    create_time: _dt.datetime | None = None,
+) -> MagicMock:
+    """Build a fake FileSearchStore resource."""
+    store = MagicMock()
+    store.name = name
+    store.display_name = display_name
+    store.active_documents_count = active
+    store.pending_documents_count = pending
+    store.failed_documents_count = failed
+    store.size_bytes = size_bytes
+    store.create_time = create_time
+    return store
+
+
+def _mk_async_pager(items: list) -> MagicMock:
+    """Build a MagicMock that supports `async for` over items.
+
+    async client.aio.file_search_stores.list() returns an AsyncPager; our
+    adapter uses `async for store in await client.aio...list()`, so we need
+    a coroutine that resolves to an async-iterable.
+    """
+
+    class _AsyncIter:
+        def __init__(self, xs):
+            self._xs = list(xs)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._xs:
+                raise StopAsyncIteration
+            return self._xs.pop(0)
+
+    return _AsyncIter(items)
+
+
+@contextmanager
+def _patched_client(
+    *,
+    create_store=None,
+    upload_ops: list | None = None,
+    list_stores: list | None = None,
+    delete_side_effect=None,
+    operations_get_side_effect=None,
+    generate_content=None,
+):
+    """Context manager yielding a mocked genai.Client."""
+    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
+        client = MagicMock()
+
+        # Async file_search_stores surface
+        if create_store is not None:
+            client.aio.file_search_stores.create = AsyncMock(return_value=create_store)
+        if upload_ops is not None:
+            client.aio.file_search_stores.upload_to_file_search_store = AsyncMock(
+                side_effect=list(upload_ops)
+            )
+        if list_stores is not None:
+            client.aio.file_search_stores.list = AsyncMock(
+                return_value=_mk_async_pager(list_stores)
+            )
+        if delete_side_effect is not None:
+            client.aio.file_search_stores.delete = AsyncMock(side_effect=delete_side_effect)
+        else:
+            client.aio.file_search_stores.delete = AsyncMock(return_value=None)
+
+        # operations.get — signature is (operation, *, config=None)
+        if operations_get_side_effect is not None:
+            client.aio.operations.get = AsyncMock(side_effect=operations_get_side_effect)
+
+        if generate_content is not None:
+            if isinstance(generate_content, Exception):
+                client.aio.models.generate_content = AsyncMock(side_effect=generate_content)
+            else:
+                client.aio.models.generate_content = AsyncMock(return_value=generate_content)
+
+        mock_cls.return_value = client
+        yield client
+
+
 def test_adapter_id_and_capabilities():
     a = GeminiFSBackend(api_key="g_test")
     assert a.id == "gemini_fs"
@@ -73,12 +174,39 @@ def test_missing_api_key_raises_auth_invalid():
 async def test_upload_files_returns_indexing_status(tmp_path):
     f = tmp_path / "paper.pdf"
     f.write_bytes(b"%PDF-1.4\n%test")
-    a = GeminiFSBackend(api_key="g_test")
-    result = await a.upload_files([str(f)])
+    store = _mk_store(name="fileSearchStores/abc123def456")
+    op = _mk_upload_operation(name="operations/up_op_1")
+    with _patched_client(create_store=store, upload_ops=[op]):
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.upload_files([str(f)])
+
     assert result["status"] == "indexing"
     assert result["file_count"] == 1
-    assert result["corpus_id"].startswith("cor_")
-    assert result["operation_id"].startswith("operations/")
+    # corpus_id is the short id extracted from the store name
+    assert result["corpus_id"] == "abc123def456"
+    # operation_id is the last upload op's name
+    assert result["operation_id"] == "operations/up_op_1"
+
+
+@pytest.mark.asyncio
+async def test_upload_files_two_files_captures_both_operations(tmp_path):
+    f1 = tmp_path / "a.pdf"
+    f1.write_bytes(b"%PDF-1.4")
+    f2 = tmp_path / "b.pdf"
+    f2.write_bytes(b"%PDF-1.4")
+    store = _mk_store(name="fileSearchStores/multi")
+    op1 = _mk_upload_operation(name="operations/op_a")
+    op2 = _mk_upload_operation(name="operations/op_b")
+    with _patched_client(create_store=store, upload_ops=[op1, op2]):
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.upload_files([str(f1), str(f2)])
+
+    assert result["corpus_id"] == "multi"
+    assert result["file_count"] == 2
+    # operation_id returns the LAST op's name per our contract
+    assert result["operation_id"] == "operations/op_b"
+    # Both ops retained internally for poll_status
+    assert len(a._states["multi"]["operations"]) == 2
 
 
 def test_upload_files_relative_path_raises(tmp_path, monkeypatch):
@@ -116,11 +244,17 @@ async def test_upload_files_wrong_format_raises(tmp_path):
 async def test_poll_status_indexing_then_complete(tmp_path):
     f = tmp_path / "paper.pdf"
     f.write_bytes(b"%PDF-1.4")
-    a = GeminiFSBackend(api_key="g_test")
-    up = await a.upload_files([str(f)])
+    store = _mk_store(name="fileSearchStores/poll1")
+    op = _mk_upload_operation(name="operations/poll_op", done=False)
+    with _patched_client(create_store=store, upload_ops=[op]):
+        a = GeminiFSBackend(api_key="g_test")
+        up = await a.upload_files([str(f)])
     cid = up["corpus_id"]
 
-    s1 = await a.poll_status(cid)
+    # Poll 1 — still not done.
+    op_still_running = _mk_upload_operation(name="operations/poll_op", done=False)
+    with _patched_client(operations_get_side_effect=[op_still_running]):
+        s1 = await a.poll_status(cid)
     assert s1["corpus_id"] == cid
     assert s1["indexed"] is False
     assert s1["file_count"] == 1
@@ -129,11 +263,64 @@ async def test_poll_status_indexing_then_complete(tmp_path):
     assert s1["warnings"] == []
     assert isinstance(s1["last_checked_at"], str)
 
-    a._mark_complete(cid)
-    s2 = await a.poll_status(cid)
+    # Flip to done via test-only helper and re-poll (helper mutates cached op,
+    # but poll_status re-fetches from the API, so we mock that too).
+    op_done = _mk_upload_operation(name="operations/poll_op", done=True)
+    with _patched_client(operations_get_side_effect=[op_done]):
+        s2 = await a.poll_status(cid)
     assert s2["indexed"] is True
     assert s2["indexed_file_count"] == 1
     assert s2["progress"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_poll_status_mark_complete_helper(tmp_path):
+    """_mark_complete is a test-only shortcut that skips polling the API."""
+    f = tmp_path / "paper.pdf"
+    f.write_bytes(b"%PDF-1.4")
+    store = _mk_store(name="fileSearchStores/mark1")
+    op = _mk_upload_operation(name="operations/mark_op", done=False)
+    with _patched_client(create_store=store, upload_ops=[op]):
+        a = GeminiFSBackend(api_key="g_test")
+        up = await a.upload_files([str(f)])
+    cid = up["corpus_id"]
+
+    a._mark_complete(cid)
+    # After _mark_complete, cached op is flipped; poll_status should still
+    # call operations.get, so we mock it to return a done op.
+    op_done = _mk_upload_operation(name="operations/mark_op", done=True)
+    with _patched_client(operations_get_side_effect=[op_done]):
+        s = await a.poll_status(cid)
+    assert s["indexed"] is True
+    assert s["indexed_file_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_status_failed_op_surfaces_partial_index_warning(tmp_path):
+    f1 = tmp_path / "ok.pdf"
+    f1.write_bytes(b"%PDF-1.4")
+    f2 = tmp_path / "bad.pdf"
+    f2.write_bytes(b"%PDF-1.4")
+    store = _mk_store(name="fileSearchStores/mixed")
+    op1 = _mk_upload_operation(name="operations/ok")
+    op2 = _mk_upload_operation(name="operations/bad")
+    with _patched_client(create_store=store, upload_ops=[op1, op2]):
+        a = GeminiFSBackend(api_key="g_test")
+        up = await a.upload_files([str(f1), str(f2)])
+    cid = up["corpus_id"]
+
+    op_ok = _mk_upload_operation(name="operations/ok", done=True)
+    op_bad = _mk_upload_operation(
+        name="operations/bad", done=True, error={"code": 3, "message": "bad file"}
+    )
+    with _patched_client(operations_get_side_effect=[op_ok, op_bad]):
+        s = await a.poll_status(cid)
+    assert s["indexed"] is False  # one failed
+    assert s["indexed_file_count"] == 1
+    assert s["progress"] == 0.5
+    assert len(s["warnings"]) == 1
+    assert s["warnings"][0]["code"] == RecoveryEnum.PARTIAL_INDEX
+    assert s["warnings"][0]["partial_results"] is True
 
 
 @pytest.mark.asyncio
@@ -149,20 +336,37 @@ async def test_poll_status_unknown_corpus_raises(tmp_path):
 
 @pytest.mark.asyncio
 async def test_list_corpora_empty():
-    a = GeminiFSBackend(api_key="g_test")
-    assert await a.list_corpora() == []
+    with _patched_client(list_stores=[]):
+        a = GeminiFSBackend(api_key="g_test")
+        assert await a.list_corpora() == []
 
 
 @pytest.mark.asyncio
 async def test_list_corpora_one(tmp_path):
     f = tmp_path / "x.pdf"
     f.write_bytes(b"x")
-    a = GeminiFSBackend(api_key="g_test")
-    up = await a.upload_files([str(f)])
-    out = await a.list_corpora()
+    store = _mk_store(name="fileSearchStores/one_upload")
+    op = _mk_upload_operation(name="operations/o1")
+    with _patched_client(create_store=store, upload_ops=[op]):
+        a = GeminiFSBackend(api_key="g_test")
+        up = await a.upload_files([str(f)])
+
+    # Server returns the store we just made, plus counts.
+    listed = _mk_store(
+        name="fileSearchStores/one_upload",
+        display_name="refcast-display",
+        active=0,
+        pending=1,
+        failed=0,
+        size_bytes=1,
+        create_time=_dt.datetime(2026, 4, 15, tzinfo=_dt.UTC),
+    )
+    with _patched_client(list_stores=[listed]):
+        out = await a.list_corpora()
     assert len(out) == 1
     summary = out[0]
     assert summary["corpus_id"] == up["corpus_id"]
+    assert summary["name"] == "refcast-display"
     assert summary["file_count"] == 1
     assert summary["indexed_file_count"] == 0
     assert summary["total_bytes"] == 1
@@ -172,14 +376,14 @@ async def test_list_corpora_one(tmp_path):
 
 @pytest.mark.asyncio
 async def test_list_corpora_two(tmp_path):
-    a = GeminiFSBackend(api_key="g_test")
-    f1 = tmp_path / "a.pdf"
-    f1.write_bytes(b"aa")
-    f2 = tmp_path / "b.txt"
-    f2.write_bytes(b"bbb")
-    await a.upload_files([str(f1)])
-    await a.upload_files([str(f2)])
-    assert len(await a.list_corpora()) == 2
+    s1 = _mk_store(name="fileSearchStores/store_a", active=1)
+    s2 = _mk_store(name="fileSearchStores/store_b", active=2)
+    with _patched_client(list_stores=[s1, s2]):
+        a = GeminiFSBackend(api_key="g_test")
+        result = await a.list_corpora()
+    assert len(result) == 2
+    ids = {r["corpus_id"] for r in result}
+    assert ids == {"store_a", "store_b"}
 
 
 # --- delete_corpus ---
@@ -187,23 +391,31 @@ async def test_list_corpora_two(tmp_path):
 
 @pytest.mark.asyncio
 async def test_delete_corpus_success(tmp_path):
-    a = GeminiFSBackend(api_key="g_test")
     f = tmp_path / "x.pdf"
     f.write_bytes(b"x")
-    up = await a.upload_files([str(f)])
+    store = _mk_store(name="fileSearchStores/to_delete")
+    op = _mk_upload_operation(name="operations/d1")
+    with _patched_client(create_store=store, upload_ops=[op]):
+        a = GeminiFSBackend(api_key="g_test")
+        up = await a.upload_files([str(f)])
     cid = up["corpus_id"]
-    result = await a.delete_corpus(cid)
+
+    with _patched_client(list_stores=[]):
+        result = await a.delete_corpus(cid)
     assert result["corpus_id"] == cid
     assert result["deleted"] is True
     assert result["files_removed"] == 1
-    assert await a.list_corpora() == []
+    # Confirm local state is cleared.
+    assert cid not in a._states
 
 
 @pytest.mark.asyncio
 async def test_delete_corpus_not_found_raises():
-    a = GeminiFSBackend(api_key="g_test")
-    with pytest.raises(BackendError) as exc:
-        await a.delete_corpus("cor_unknown")
+    """Deleting a corpus we've never seen → API returns 404 → CORPUS_NOT_FOUND."""
+    with _patched_client(delete_side_effect=[Exception("HTTP 404 NOT_FOUND")]):
+        a = GeminiFSBackend(api_key="g_test")
+        with pytest.raises(BackendError) as exc:
+            await a.delete_corpus("cor_unknown")
     assert exc.value.code == RecoveryEnum.CORPUS_NOT_FOUND
     assert exc.value.recovery_action == "user_action"
 
@@ -236,11 +448,7 @@ async def test_upload_files_too_large_raises(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_execute_populates_citations_and_backend():
     fake = _mk_response("Q3 revenue was $4.2M", citations_count=2)
-    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
-        client = MagicMock()
-        client.aio.models.generate_content = AsyncMock(return_value=fake)
-        mock_cls.return_value = client
-
+    with _patched_client(generate_content=fake):
         a = GeminiFSBackend(api_key="g_test")
         result = await a.execute(query="What was Q3 revenue?", corpus_id="cor_x", constraints=None)
 
@@ -278,11 +486,7 @@ async def test_execute_without_corpus_id_no_filesearch_tool():
 @pytest.mark.asyncio
 async def test_execute_require_citation_zero_raises_parse_error():
     fake = _mk_response("answer without citations", citations_count=0)
-    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
-        client = MagicMock()
-        client.aio.models.generate_content = AsyncMock(return_value=fake)
-        mock_cls.return_value = client
-
+    with _patched_client(generate_content=fake):
         a = GeminiFSBackend(api_key="g_test")
         with pytest.raises(BackendError) as exc:
             await a.execute(query="q", corpus_id="cor_x", constraints={"require_citation": True})
@@ -293,11 +497,7 @@ async def test_execute_require_citation_zero_raises_parse_error():
 @pytest.mark.asyncio
 async def test_execute_require_citation_false_allows_zero():
     fake = _mk_response("plain answer", citations_count=0)
-    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
-        client = MagicMock()
-        client.aio.models.generate_content = AsyncMock(return_value=fake)
-        mock_cls.return_value = client
-
+    with _patched_client(generate_content=fake):
         a = GeminiFSBackend(api_key="g_test")
         result = await a.execute(
             query="q", corpus_id="cor_x", constraints={"require_citation": False}
@@ -309,11 +509,7 @@ async def test_execute_require_citation_false_allows_zero():
 @pytest.mark.asyncio
 async def test_execute_max_citations_truncates():
     fake = _mk_response("ans", citations_count=10)
-    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
-        client = MagicMock()
-        client.aio.models.generate_content = AsyncMock(return_value=fake)
-        mock_cls.return_value = client
-
+    with _patched_client(generate_content=fake):
         a = GeminiFSBackend(api_key="g_test")
         result = await a.execute(query="q", corpus_id="cor_x", constraints={"max_citations": 3})
         assert len(result["citations"]) == 3
@@ -322,13 +518,9 @@ async def test_execute_max_citations_truncates():
 @pytest.mark.asyncio
 async def test_execute_empty_corpus_maps_to_empty_corpus_code():
     """Gemini error mentioning 'empty' or 'FAILED_PRECONDITION' maps to EMPTY_CORPUS."""
-    with patch("refcast.backends.gemini_fs.genai.Client") as mock_cls:
-        client = MagicMock()
-        client.aio.models.generate_content = AsyncMock(
-            side_effect=Exception("FAILED_PRECONDITION: File search store is empty")
-        )
-        mock_cls.return_value = client
-
+    with _patched_client(
+        generate_content=Exception("FAILED_PRECONDITION: File search store is empty")
+    ):
         a = GeminiFSBackend(api_key="g_test")
         with pytest.raises(BackendError) as exc:
             await a.execute(query="q", corpus_id="cor_empty", constraints=None)

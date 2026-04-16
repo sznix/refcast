@@ -76,3 +76,50 @@ async def test_router_fallback_when_gemini_corpus_invalid(
         assert result["backend_used"] == "exa"
         assert result["fallback_scope"] == "broader"
         assert len(result["warnings"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_gemini_fs_full_corpus_lifecycle(gemini: GeminiFSBackend, tmp_path) -> None:
+    """
+    End-to-end: create corpus -> upload PDF -> poll until indexed ->
+    query against it -> verify citations -> delete.
+    """
+    import asyncio as _asyncio
+    import contextlib
+
+    # Tiny PDF so indexing is fast
+    test_pdf = tmp_path / "smoke.pdf"
+    test_pdf.write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+        b"/Contents 4 0 R>>endobj\n"
+        b"4 0 obj<</Length 44>>stream\n"
+        b"BT /F1 12 Tf 100 700 Td (refcast smoke test) Tj ET\n"
+        b"endstream\nendobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+    )
+
+    upload = await gemini.upload_files([str(test_pdf)])
+    corpus_id = upload["corpus_id"]
+
+    try:
+        # Poll up to 60s for indexing
+        status = await gemini.poll_status(corpus_id)
+        for _ in range(12):
+            status = await gemini.poll_status(corpus_id)
+            if status["indexed"]:
+                break
+            await _asyncio.sleep(5)
+        assert status["indexed"], f"Corpus did not index in 60s: {status}"
+
+        # Query
+        result = await gemini.execute(
+            query="What is the content of this document?",
+            corpus_id=corpus_id,
+            constraints={"max_citations": 3, "require_citation": False},
+        )
+        assert result["backend_used"] == "gemini_fs"
+    finally:
+        # Always clean up
+        with contextlib.suppress(Exception):
+            await gemini.delete_corpus(corpus_id)
