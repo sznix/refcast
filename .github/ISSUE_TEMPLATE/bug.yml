@@ -1,0 +1,62 @@
+name: Bug report
+description: Something isn't working right
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: "When I call research() with corpus_id=X, I get..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Steps or code to reproduce the issue.
+      placeholder: |
+        1. Set up refcast with Gemini backend
+        2. Call research(query="...", corpus_id="...")
+        3. See error: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+      placeholder: "I expected a ResearchResult with citations, but got..."
+
+  - type: input
+    id: version
+    attributes:
+      label: refcast version
+      description: "Run: python -c \"import refcast; print(refcast.__version__)\""
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11.9"
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Which backend?
+      options:
+        - Gemini File Search
+        - Exa
+        - Both / fallback path
+        - Not sure
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Paste the full error (redact any API keys!).
+      render: shell
