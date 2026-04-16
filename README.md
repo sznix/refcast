@@ -297,8 +297,6 @@ Your queries and documents are sent **only** to the APIs you configure (Gemini, 
 
 refcast does NOT validate citation accuracy — it normalizes citation **format**. Always verify citations independently for high-stakes use.
 
-For full details: see [SECURITY.md](SECURITY.md).
-
 ## Development
 
 ```bash
