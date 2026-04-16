@@ -2,7 +2,9 @@
 
 ## Reporting vulnerabilities
 
-If you find a security issue, **do not open a public GitHub issue.** Instead, email GitHub private vulnerability reporting with:
+If you find a security issue, **do not open a public GitHub issue.** Instead, use [GitHub's private vulnerability reporting](https://github.com/sznix/refcast/security/advisories/new) to submit it confidentially.
+
+Include:
 - Description of the vulnerability
 - Steps to reproduce
 - Impact assessment
