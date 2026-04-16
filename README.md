@@ -287,6 +287,18 @@ Both Gemini and Exa have generous free tiers. No credit card required to start.
 | v0.2 | Planned | NotebookLM Enterprise API backend, statistical drift detection, idempotency |
 | v0.3 | Future | Formally-bounded semantic cache, plugin auth strategies, cost governance |
 
+## Privacy & safety
+
+refcast is a **local process** — it runs on your machine, not a cloud server. No telemetry. No analytics. No data collection.
+
+Your queries and documents are sent **only** to the APIs you configure (Gemini, Exa) — subject to **their** privacy policies, not ours. If your research contains sensitive information, review:
+- [Google Gemini API terms](https://ai.google.dev/gemini-api/terms)
+- [Exa terms of service](https://exa.ai/terms)
+
+refcast does NOT validate citation accuracy — it normalizes citation **format**. Always verify citations independently for high-stakes use.
+
+For full details: see [SECURITY.md](SECURITY.md).
+
 ## Development
 
 ```bash
