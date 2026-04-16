@@ -8,7 +8,7 @@ One MCP tool that brokers research across multiple backends — when one fails, 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen.svg)](#testing)
+[![CI](https://github.com/sznix/refcast/actions/workflows/test.yml/badge.svg)](https://github.com/sznix/refcast/actions/workflows/test.yml)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6.svg)](https://modelcontextprotocol.io)
 [![fastmcp](https://img.shields.io/badge/built%20with-fastmcp%203.x-FF6B35.svg)](https://gofastmcp.com)
 
@@ -112,26 +112,46 @@ Every backend returns the same shape. Swap engines without touching a single par
 
 ```json
 {
-  "answer": "Quantum computing uses qubits that can exist in superposition...",
+  "answer": "Retrieval-augmented generation (RAG) is a technique that enables large language models...",
   "citations": [
     {
-      "text": "Unlike classical bits, qubits leverage quantum superposition",
-      "source_url": "https://example.com/quantum-intro",
-      "author": "Dr. Sarah Chen",
-      "date": "2026-03-15",
-      "confidence": 0.94,
+      "text": "Retrieval-augmented generation (RAG) is a technique that grants generative AI...",
+      "source_url": "https://en.wikipedia.org/wiki/Retrieval-augmented_generation",
+      "author": null,
+      "date": null,
+      "confidence": 1.0,
       "backend_used": "exa",
-      "raw": { }
+      "raw": {}
+    },
+    {
+      "text": "What is Retrieval Augmented Generation (RAG)? The Key to Smarter, More Accurate...",
+      "source_url": "https://www.digitalocean.com/resources/articles/rag",
+      "author": null,
+      "date": "2026-03-12T04:16:30.000Z",
+      "confidence": 0.5,
+      "backend_used": "exa",
+      "raw": {}
+    },
+    {
+      "text": "Retrieval-Augmented Generation: A Comprehensive Survey of Architectures...",
+      "source_url": "https://arxiv.org/html/2506.00054v1",
+      "author": null,
+      "date": null,
+      "confidence": 0.0,
+      "backend_used": "exa",
+      "raw": {}
     }
   ],
   "backend_used": "exa",
-  "latency_ms": 1438,
+  "latency_ms": 383,
   "cost_cents": 0.7,
   "fallback_scope": "none",
   "warnings": [],
   "error": null
 }
 ```
+
+> This is **real output** from a live `research()` call, not a hypothetical example.
 
 ### Structured errors (not string messages)
 

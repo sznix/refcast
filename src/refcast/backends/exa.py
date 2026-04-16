@@ -56,6 +56,7 @@ class ExaBackend:
                 client.search_and_contents,
                 query,
                 num_results=max_citations,
+                type="neural",  # "neural" returns relevance scores; "auto" returns null
             )
         except Exception as e:
             raise self._map_exception(e) from e
