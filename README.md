@@ -4,7 +4,7 @@
 
 **Cast once. Cite anywhere.**
 
-An open-source MCP server that sends your research queries to multiple backends — if one goes down, the next one picks up automatically, and your citations come back in the same shape every time. Works with Claude Code, Cursor, Gemini CLI, and any MCP client.
+An open-source MCP server that sends your research queries to multiple backends — if one goes down, the next one picks up automatically, and your citations come back in the same shape every time. Answers include inline `[1]` `[2]` citation markers synthesized from source evidence, with an optional `depth="deep"` mode that fans out into multiple perspectives for comprehensive coverage. Works with Claude Code, Cursor, Gemini CLI, and any MCP client.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
@@ -118,7 +118,7 @@ Register the server with command `refcast-mcp` (stdio transport). Consult your c
 | `corpus.status(corpus_id)` | Check indexing progress. Poll until `indexed: true`. |
 | `corpus.list()` | List all your corpora with file counts and sizes. |
 | `corpus.delete(corpus_id)` | Remove a corpus and all its files. |
-| **`research(query)`** | **The main tool.** Routes query across backends, returns unified citations. |
+| **`research(query)`** | **The main tool.** Routes query across backends, returns unified citations with inline `[1]` `[2]` markers. Pass `constraints={"depth": "deep"}` for multi-perspective research. |
 
 ### Unified citation envelope
 
@@ -126,7 +126,7 @@ Every backend returns the same shape. Swap engines without touching a single par
 
 ```json
 {
-  "answer": "Retrieval-augmented generation (RAG) is a technique that enables large language models...",
+  "answer": "Retrieval-augmented generation (RAG) is a technique that grants generative AI models access to external knowledge [1], combining retrieval with generation for more accurate responses [2]...",
   "citations": [
     {
       "text": "Retrieval-augmented generation (RAG) is a technique that grants generative AI...",
@@ -270,8 +270,9 @@ Both Gemini and Exa have generous free tiers. No credit card required to start.
 | Version | Status | What's new |
 |:--------|:-------|:-----------|
 | **v0.1** | **Shipped** | 5 tools, 2 backends, serial fallback, unified citations, structured errors |
-| v0.2 | Planned | NotebookLM Enterprise API backend, statistical drift detection, idempotency |
-| v0.3 | Future | Formally-bounded semantic cache, plugin auth strategies, cost governance |
+| **v0.2** | **Shipped** | Answer synthesis with `[1]` `[2]` markers, `depth="deep"` multi-perspective research, citation deduplication |
+| v0.3 | Planned | NotebookLM Enterprise API backend, statistical drift detection, idempotency |
+| v0.4 | Future | Formally-bounded semantic cache, plugin auth strategies, cost governance |
 
 ## Privacy & safety
 
@@ -292,7 +293,7 @@ uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 
 # Run tests
-pytest -m "not integration"       # 128 unit tests
+pytest -m "not integration"       # 152 unit tests
 pytest -m integration             # requires real API keys
 
 # Lint + types
@@ -316,7 +317,7 @@ src/refcast/
 
 ### Testing
 
-128 unit tests with `respx` HTTP mocking + 5 gated integration tests against real APIs. CI runs on Python 3.11/3.12/3.13 across Ubuntu and macOS.
+152 unit tests with `respx` HTTP mocking + 5 gated integration tests against real APIs. CI runs on Python 3.11/3.12/3.13 across Ubuntu and macOS.
 
 ```bash
 pytest -m "not integration" -q     # fast, no API keys needed
