@@ -163,3 +163,8 @@ def test_corpus_summary():
 def test_corpus_delete_result():
     d: CorpusDeleteResult = {"corpus_id": "cor_x", "deleted": True, "files_removed": 3}
     assert d["deleted"] is True
+
+
+def test_research_constraints_depth():
+    rc: ResearchConstraints = {"depth": "deep"}
+    assert rc["depth"] == "deep"

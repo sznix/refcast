@@ -75,6 +75,7 @@ class ResearchConstraints(TypedDict, total=False):
     date_after: str
     require_citation: bool
     preferred_backend: Literal["gemini_fs", "exa"]
+    depth: Literal["quick", "deep"]
 
 
 class ResearchResult(TypedDict):
