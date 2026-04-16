@@ -302,3 +302,47 @@ def test_be_to_struct_redacts_raw_secrets():
     result = _be_to_struct(e, fallback_used=False)
     assert result["raw"]["authorization"] == "[REDACTED]"
     assert result["raw"]["status"] == 500
+
+
+# --- BUG 3 (audit): non-BackendError exceptions wrapped as UNKNOWN ---
+
+
+@pytest.mark.asyncio
+async def test_execute_research_non_backend_error_wrapped_as_unknown():
+    """A raw ValueError from backend.execute should be wrapped as UNKNOWN StructuredError."""
+    g = _backend(
+        "gemini_fs",
+        {"search", "upload", "cite"},
+        exec_error=ValueError("unexpected schema drift"),
+    )
+    result = await execute_research(
+        query="q",
+        corpus_id="cor_x",
+        constraints=None,
+        registered={"gemini_fs": g},
+    )
+    assert result["error"] is not None
+    assert result["error"]["code"] == RecoveryEnum.UNKNOWN
+    assert "unexpected schema drift" in result["error"]["message"]
+    assert result["error"]["backend"] == "gemini_fs"
+
+
+@pytest.mark.asyncio
+async def test_execute_research_non_backend_error_falls_back():
+    """A raw TypeError from primary triggers fallback to secondary."""
+    g = _backend(
+        "gemini_fs",
+        {"search", "upload", "cite"},
+        exec_error=TypeError("NoneType has no attribute"),
+    )
+    e = _backend("exa", {"search", "cite"}, exec_result=_ok_result("exa"))
+    result = await execute_research(
+        query="q",
+        corpus_id="cor_x",
+        constraints={"preferred_backend": "gemini_fs"},
+        registered={"gemini_fs": g, "exa": e},
+    )
+    assert result["error"] is None
+    assert result["backend_used"] == "exa"
+    assert len(result["warnings"]) == 1
+    assert result["warnings"][0]["code"] == RecoveryEnum.UNKNOWN

@@ -54,9 +54,43 @@ def register(
     ) -> dict[str, Any]:
         """Query corpus or web with serial-fallback routing and unified citations."""
         partial_warning: StructuredError | None = None
+        unenforced_warnings: list[StructuredError] = []
+
+        # BUG 5: Warn about unenforced constraint fields
+        if constraints is not None:
+            if constraints.get("max_cost_cents") is not None:
+                unenforced_warnings.append(
+                    {
+                        "code": RecoveryEnum.UNKNOWN,
+                        "message": "max_cost_cents is not enforced in v0.2. It will be ignored.",
+                        "recovery_hint": "Remove max_cost_cents or wait for a future version.",
+                        "recovery_action": "user_action",
+                        "fallback_used": False,
+                        "partial_results": False,
+                        "retry_after_ms": None,
+                        "backend": None,
+                        "raw": {},
+                    }
+                )
+            if constraints.get("date_after") is not None:
+                unenforced_warnings.append(
+                    {
+                        "code": RecoveryEnum.UNKNOWN,
+                        "message": "date_after is not enforced in v0.2. It will be ignored.",
+                        "recovery_hint": "Remove date_after or wait for a future version.",
+                        "recovery_action": "user_action",
+                        "fallback_used": False,
+                        "partial_results": False,
+                        "retry_after_ms": None,
+                        "backend": None,
+                        "raw": {},
+                    }
+                )
 
         # Pre-flight corpus-state check when a corpus_id is provided.
-        if corpus_id is not None:
+        # Skip preflight if user explicitly chose a non-corpus backend (e.g. Exa).
+        primary_backend = (constraints or {}).get("preferred_backend")
+        if corpus_id is not None and primary_backend != "exa":
             gemini = backends.get("gemini_fs")
             if gemini is not None:
                 try:
@@ -99,6 +133,13 @@ def register(
                         corpus_id=corpus_id,
                     )
 
+        # BUG 4: Validate max_citations — clamp to sane range
+        if constraints is not None:
+            max_cit = constraints.get("max_citations", 10)
+            if not isinstance(max_cit, int) or max_cit < 1:
+                max_cit = 10
+            constraints["max_citations"] = min(max_cit, 50)
+
         typed_constraints: ResearchConstraints | None = (
             constraints  # type: ignore[assignment]
             if constraints is not None
@@ -121,6 +162,11 @@ def register(
             pw_list: list[StructuredError] = list(existing_warnings)
             pw_list.append(partial_warning)
             out["warnings"] = pw_list
+
+        if unenforced_warnings:
+            uw_list: list[StructuredError] = list(out.get("warnings") or [])
+            uw_list.extend(unenforced_warnings)
+            out["warnings"] = uw_list
 
         return enforce_response_size(out)
 

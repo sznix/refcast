@@ -455,3 +455,138 @@ async def test_research_deep_all_sub_queries_errored_propagates_error(
     assert result.get("error") is not None, (
         "Deep mode swallowed all sub-query errors — should have propagated the first error"
     )
+
+
+# --- BUG 4 (audit): max_citations validation ---
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_negative_max_citations_uses_default(
+    mock_execute: AsyncMock,
+) -> None:
+    """max_citations=-5 should be clamped to the sane default of 10."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"max_citations": -5})
+
+    assert result["error"] is None
+    # The constraint passed to execute_research should have been clamped
+    call_constraints = mock_execute.call_args[0][2]
+    assert call_constraints["max_citations"] == 10
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_huge_max_citations_capped_at_50(
+    mock_execute: AsyncMock,
+) -> None:
+    """max_citations=9999 should be capped at 50."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"max_citations": 9999})
+
+    assert result["error"] is None
+    call_constraints = mock_execute.call_args[0][2]
+    assert call_constraints["max_citations"] == 50
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_non_int_max_citations_uses_default(
+    mock_execute: AsyncMock,
+) -> None:
+    """max_citations='abc' (non-int) should be replaced with sane default."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"max_citations": "abc"})
+
+    assert result["error"] is None
+    call_constraints = mock_execute.call_args[0][2]
+    assert call_constraints["max_citations"] == 10
+
+
+# --- BUG 5 (audit): Unenforced constraints produce warnings ---
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_max_cost_cents_warns(
+    mock_execute: AsyncMock,
+) -> None:
+    """Setting max_cost_cents should produce an 'unenforced' warning."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"max_cost_cents": 1})
+
+    messages = [w.get("message", "") for w in result.get("warnings", [])]
+    assert any("max_cost_cents" in m and "not enforced" in m for m in messages)
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_date_after_warns(
+    mock_execute: AsyncMock,
+) -> None:
+    """Setting date_after should produce an 'unenforced' warning."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"date_after": "2025-01-01"})
+
+    messages = [w.get("message", "") for w in result.get("warnings", [])]
+    assert any("date_after" in m and "not enforced" in m for m in messages)
+
+
+# --- BUG 6 (audit): corpus preflight skipped when preferred_backend=exa ---
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_corpus_preflight_skipped_for_exa_preference(
+    mock_execute: AsyncMock,
+) -> None:
+    """When preferred_backend='exa', corpus preflight should NOT run against Gemini."""
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+
+    gemini = _mock_backend("gemini_fs", frozenset({"search", "upload", "cite"}))
+    gemini.poll_status = AsyncMock(side_effect=Exception("should not be called"))
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+
+    mcp, captured = _mock_mcp()
+    register(mcp, {"gemini_fs": gemini, "exa": exa})
+    fn = captured["research"]
+    result = await fn(
+        "question",
+        "cor_abc",
+        {"preferred_backend": "exa"},
+    )
+
+    # Gemini's poll_status should NOT have been called
+    gemini.poll_status.assert_not_awaited()
+    assert result["error"] is None

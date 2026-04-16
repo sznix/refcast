@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import re
 import time
@@ -84,6 +85,14 @@ class GeminiFSBackend:
         return genai.Client(api_key=self._api_key)
 
     async def upload_files(self, files: list[str]) -> CorpusUploadResult:
+        if not files:
+            raise BackendError(
+                RecoveryEnum.UNSUPPORTED_FORMAT,
+                "No files provided — pass at least one file path",
+                backend=self.id,
+                recovery_action="user_action",
+            )
+
         for p in files:
             self._validate_path(p)
 
@@ -337,6 +346,9 @@ class GeminiFSBackend:
                     file=file_path,
                 )
             except Exception as e:
+                # Clean up the orphaned store before propagating.
+                with contextlib.suppress(Exception):
+                    await client.aio.file_search_stores.delete(name=store_name)
                 raise self._map_exception(e) from e
             operations.append(op)
         return store_name, operations

@@ -724,3 +724,44 @@ def test_map_exception_no_false_positive_429_in_id():
     err = a._map_exception(Exception("Resource 42907 access denied"))
     # Should be UNKNOWN, not RATE_LIMITED
     assert err.code == RecoveryEnum.UNKNOWN
+
+
+# --- BUG 2 (audit): upload_files([]) raises BackendError ---
+
+
+@pytest.mark.asyncio
+async def test_upload_files_empty_list_raises():
+    """upload_files([]) must raise BackendError, not create an empty store."""
+    a = GeminiFSBackend(api_key="g_test")
+    with pytest.raises(BackendError) as exc:
+        await a.upload_files([])
+    assert exc.value.code == RecoveryEnum.UNSUPPORTED_FORMAT
+    assert exc.value.recovery_action == "user_action"
+    assert "No files" in exc.value.message
+
+
+# --- BUG 1 (audit): Orphan store cleanup on partial upload failure ---
+
+
+@pytest.mark.asyncio
+async def test_upload_files_cleans_up_store_on_upload_failure(tmp_path):
+    """If a file upload fails, the created store should be deleted (best-effort)."""
+    f1 = tmp_path / "ok.pdf"
+    f1.write_bytes(b"%PDF-1.4")
+    f2 = tmp_path / "fail.pdf"
+    f2.write_bytes(b"%PDF-1.4")
+
+    store = _mk_store(name="fileSearchStores/orphan_test")
+    op1 = _mk_upload_operation(name="operations/ok")
+
+    with _patched_client(
+        create_store=store,
+        upload_ops=[op1, Exception("upload failed for file 2")],
+    ) as client:
+        a = GeminiFSBackend(api_key="g_test")
+        with pytest.raises(BackendError):
+            await a.upload_files([str(f1), str(f2)])
+        # The store should have been cleaned up via delete
+        client.aio.file_search_stores.delete.assert_awaited_once_with(
+            name="fileSearchStores/orphan_test"
+        )

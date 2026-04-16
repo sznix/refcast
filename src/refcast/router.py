@@ -198,6 +198,26 @@ async def execute_research(
                 )
             warnings.append(_be_to_struct(e, fallback_used=True))
             continue
+        except Exception as e:
+            # Wrap unexpected errors so they surface as StructuredError
+            wrapped = BackendError(
+                RecoveryEnum.UNKNOWN,
+                f"Unexpected error in {backend.id}: {e}",
+                backend=backend.id,
+                recovery_action="fallback",
+                raw={"type": type(e).__name__, "message": str(e)},
+            )
+            if is_last:
+                return _failed_result(
+                    wrapped.code,
+                    wrapped.message,
+                    cast(RecoveryAction, wrapped.recovery_action),
+                    warnings=warnings,
+                    backend=wrapped.backend,
+                    raw=wrapped.raw,
+                )
+            warnings.append(_be_to_struct(wrapped, fallback_used=True))
+            continue
 
         # Success path
         scope = classify_scope_shift(
