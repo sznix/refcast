@@ -250,8 +250,10 @@ async def test_execute_research_primary_fails_fallback_to_secondary():
     )
     assert result["backend_used"] == "exa"
     assert result["fallback_scope"] == "broader"  # gemini_fs -> exa with corpus_id
-    assert len(result["warnings"]) == 1
-    assert result["warnings"][0]["code"] == RecoveryEnum.RATE_LIMITED
+    # Warnings: original RATE_LIMITED + scope-broadening warning (Codex audit fix)
+    assert len(result["warnings"]) >= 1
+    codes = [w["code"] for w in result["warnings"]]
+    assert RecoveryEnum.RATE_LIMITED in codes
     assert result["error"] is None
 
 
@@ -343,6 +345,80 @@ async def test_execute_research_non_backend_error_wrapped_as_unknown():
 
 
 @pytest.mark.asyncio
+async def test_execute_research_broader_scope_adds_loud_warning():
+    """Codex audit: when Exa serves a corpus query (broader scope), a warning must be
+    loud in warnings[] — not only in the fallback_scope field. Agents that don't inspect
+    fallback_scope were previously getting web results silently for corpus queries."""
+    g_err = BackendError(
+        RecoveryEnum.BACKEND_UNAVAILABLE,
+        "503",
+        backend="gemini_fs",
+        recovery_action="fallback",
+    )
+    g = _backend("gemini_fs", {"search", "upload", "cite"}, exec_error=g_err)
+    e = _backend("exa", {"search", "cite"}, exec_result=_ok_result("exa"))
+    result = await execute_research(
+        query="q",
+        corpus_id="cor_x",
+        constraints={"preferred_backend": "gemini_fs"},
+        registered={"gemini_fs": g, "exa": e},
+    )
+    assert result["fallback_scope"] == "broader"
+    # A warning must explicitly call out the scope shift
+    scope_warnings = [w for w in result["warnings"] if "broader" in w.get("message", "").lower()]
+    assert len(scope_warnings) == 1, (
+        "broader-scope fallback must surface a loud warning, not just the fallback_scope field"
+    )
+    assert scope_warnings[0]["backend"] == "exa"
+    assert scope_warnings[0]["raw"]["scope"] == "broader"
+
+
+@pytest.mark.asyncio
+async def test_execute_research_different_scope_adds_loud_warning():
+    """Symmetric: 'different' scope must also surface a loud warning."""
+    # Register gemini only; set preferred to exa (unregistered) to trigger different-scope
+    # Actually, simpler: set up both, exa primary, gemini_fs fallback with corpus_id
+    e_err = BackendError(
+        RecoveryEnum.BACKEND_UNAVAILABLE, "503", backend="exa", recovery_action="fallback"
+    )
+    e = _backend("exa", {"search", "cite"}, exec_error=e_err)
+    g = _backend("gemini_fs", {"search", "upload", "cite"}, exec_result=_ok_result("gemini_fs"))
+    result = await execute_research(
+        query="q",
+        corpus_id="cor_x",
+        constraints={"preferred_backend": "exa"},  # exa primary with corpus_id = unusual
+        registered={"gemini_fs": g, "exa": e},
+    )
+    assert result["fallback_scope"] == "different"
+    scope_warnings = [w for w in result["warnings"] if "different" in w.get("message", "").lower()]
+    assert len(scope_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_research_same_scope_no_scope_warning():
+    """Negative test: 'same' scope must NOT add a scope warning (reduce noise)."""
+    # Two exa instances is nonsensical; simulate via gemini->exa with no corpus_id → "same"
+    g_err = BackendError(
+        RecoveryEnum.BACKEND_UNAVAILABLE, "503", backend="gemini_fs", recovery_action="fallback"
+    )
+    g = _backend("gemini_fs", {"search", "upload", "cite"}, exec_error=g_err)
+    e2 = _backend("exa", {"search", "cite"}, exec_result=_ok_result("exa"))
+    result = await execute_research(
+        query="q",
+        corpus_id=None,
+        constraints={"preferred_backend": "gemini_fs"},
+        registered={"gemini_fs": g, "exa": e2},
+    )
+    assert result["fallback_scope"] == "same"
+    scope_warnings = [
+        w
+        for w in result["warnings"]
+        if "broader" in w.get("message", "").lower() or "different" in w.get("message", "").lower()
+    ]
+    assert scope_warnings == []
+
+
+@pytest.mark.asyncio
 async def test_execute_research_non_backend_error_falls_back():
     """A raw TypeError from primary triggers fallback to secondary."""
     g = _backend(
@@ -359,5 +435,7 @@ async def test_execute_research_non_backend_error_falls_back():
     )
     assert result["error"] is None
     assert result["backend_used"] == "exa"
-    assert len(result["warnings"]) == 1
-    assert result["warnings"][0]["code"] == RecoveryEnum.UNKNOWN
+    # Original TypeError wrapped as UNKNOWN + scope-broadening warning (Codex audit fix)
+    assert len(result["warnings"]) >= 1
+    codes = [w["code"] for w in result["warnings"]]
+    assert RecoveryEnum.UNKNOWN in codes

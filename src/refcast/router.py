@@ -113,6 +113,51 @@ def _hint_for(code: RecoveryEnum) -> str:
     return _RECOVERY_HINTS.get(code, "Unknown error.")
 
 
+def _scope_shift_warning(
+    scope: FallbackScope,
+    primary_backend: str,
+    served_backend: str,
+    corpus_id: str | None,
+) -> StructuredError:
+    """Surface scope-broadening or scope-different fallbacks loudly in warnings[].
+
+    Rationale (Codex audit, 2026-04-17): `fallback_scope` is a field on the
+    result, but agents that don't inspect it silently accept web results for a
+    corpus query. This warning forces the scope shift into the warnings list
+    that every agent processes.
+    """
+    if scope == "broader":
+        msg = (
+            f"Query answered from a broader source ({served_backend}) because "
+            f"primary ({primary_backend}) failed. Original corpus_id={corpus_id} "
+            f"was NOT queried."
+        )
+    else:
+        msg = (
+            f"Query answered from a fundamentally different source "
+            f"({served_backend} instead of {primary_backend}). Treat with caution."
+        )
+    return StructuredError(
+        code=RecoveryEnum.UNKNOWN,
+        message=msg,
+        recovery_hint=(
+            "Inspect result.fallback_scope. If strict corpus matching is "
+            "required, handle this case in your agent."
+        ),
+        recovery_action="user_action",
+        fallback_used=True,
+        partial_results=True,
+        retry_after_ms=None,
+        backend=served_backend,
+        raw={
+            "scope": scope,
+            "primary": primary_backend,
+            "served": served_backend,
+            "corpus_id": corpus_id,
+        },
+    )
+
+
 def _be_to_struct(e: BackendError, fallback_used: bool) -> StructuredError:
     action = cast(RecoveryAction, e.recovery_action)
     return StructuredError(
@@ -234,7 +279,19 @@ async def execute_research(
         )
         result["fallback_scope"] = scope
         existing = result.get("warnings") or []
-        result["warnings"] = warnings + list(existing)
+        combined: list[StructuredError] = warnings + list(existing)
+        # Loudly surface scope shifts — agents shouldn't have to check
+        # fallback_scope silently to learn they got a different-source answer.
+        if scope in ("broader", "different"):
+            combined.append(
+                _scope_shift_warning(
+                    scope=scope,
+                    primary_backend=primary.id,
+                    served_backend=backend.id,
+                    corpus_id=corpus_id,
+                )
+            )
+        result["warnings"] = combined
         return result
 
     # Defensive: unreachable in practice
