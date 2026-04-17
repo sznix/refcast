@@ -363,7 +363,11 @@ async def test_research_deep_no_api_key_falls_back_to_quick(
     mock_execute: AsyncMock,
     mock_synth: AsyncMock,
 ) -> None:
-    """No Gemini key with depth=deep: degrades to quick mode."""
+    """No Gemini key with depth=deep: degrades to quick mode AND surfaces a warning.
+
+    Codex audit (2026-04-17): previous behaviour silently downgraded with no signal,
+    so agents that requested deep mode got quick mode with no indication.
+    """
     mock_execute.return_value = _ok_result("exa", answer="quick answer")
 
     exa = _mock_backend("exa", frozenset({"search", "cite"}))
@@ -376,6 +380,30 @@ async def test_research_deep_no_api_key_falls_back_to_quick(
     assert mock_execute.await_count == 1
     assert result["answer"] == "quick answer"
     mock_synth.assert_not_awaited()
+    # NEW: downgrade must be visible to the agent
+    messages = [w.get("message", "").lower() for w in result.get("warnings", [])]
+    assert any("downgraded to quick" in m for m in messages), (
+        "Deep-mode downgrade to quick must surface a warning — it was silent before"
+    )
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.synthesize")
+@patch("refcast.tools.research.execute_research")
+async def test_research_depth_quick_no_downgrade_warning(
+    mock_execute: AsyncMock,
+    mock_synth: AsyncMock,
+) -> None:
+    """Negative test: quick mode must NOT add the deep-mode downgrade warning."""
+    mock_execute.return_value = _ok_result("exa", answer="quick answer")
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})  # no gemini_api_key, no deep requested
+    fn = captured["research"]
+    result = await fn("question", None, None)  # no depth constraint
+
+    messages = [w.get("message", "").lower() for w in result.get("warnings", [])]
+    assert not any("downgraded to quick" in m for m in messages)
 
 
 @pytest.mark.asyncio
@@ -586,23 +614,134 @@ async def test_research_non_int_max_citations_uses_default(
 # --- BUG 5 (audit): Unenforced constraints produce warnings ---
 
 
+# --- v0.3: evidence_pack attached to successful results ---
+
+
 @pytest.mark.asyncio
 @patch("refcast.tools.research.execute_research")
-async def test_research_max_cost_cents_warns(
+async def test_research_attaches_evidence_pack(
     mock_execute: AsyncMock,
 ) -> None:
-    """Setting max_cost_cents should produce an 'unenforced' warning."""
+    """v0.3: every successful research call returns an evidence_pack."""
     raw = _ok_result("exa")
+    mock_execute.return_value = raw
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("my query", None, None)
+
+    assert result.get("error") is None
+    assert "evidence_pack" in result
+    pack = result["evidence_pack"]
+    assert pack["query"] == "my query"
+    assert pack["citations_count"] == len(result["citations"])
+    assert len(pack["transcript_cid"]) == 64
+    assert pack["backends_used"] == [{"id": "exa"}]
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_evidence_pack_verifies(
+    mock_execute: AsyncMock,
+) -> None:
+    """Attached evidence_pack must pass verify_evidence_pack."""
+    from refcast.evidence import verify_evidence_pack
+
+    raw = _ok_result("exa")
+    mock_execute.return_value = raw
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("q", None, None)
+
+    valid, errors = verify_evidence_pack(result["evidence_pack"])
+    assert valid is True, f"Attached pack failed verification: {errors}"
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_no_evidence_pack_on_error(
+    mock_execute: AsyncMock,
+) -> None:
+    """Error responses must NOT include an evidence_pack."""
+    mock_execute.return_value = _error_result("exa", "rate_limited")
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("q", None, None)
+
+    assert result.get("error") is not None
+    assert "evidence_pack" not in result
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_max_cost_cents_within_budget_no_warning(
+    mock_execute: AsyncMock,
+) -> None:
+    """Budget > known min cost AND actual cost ≤ budget → no max_cost_cents warning."""
+    raw = _ok_result("exa")  # cost_cents=0.1
     mock_execute.return_value = raw
 
     exa = _mock_backend("exa", frozenset({"search", "cite"}))
     mcp, captured = _mock_mcp()
     register(mcp, {"exa": exa})
     fn = captured["research"]
-    result = await fn("question", None, {"max_cost_cents": 1})
+    result = await fn("question", None, {"max_cost_cents": 5})  # > 0.7 Exa min
 
+    assert result["error"] is None
     messages = [w.get("message", "") for w in result.get("warnings", [])]
-    assert any("max_cost_cents" in m and "not enforced" in m for m in messages)
+    assert not any("max_cost_cents" in m.lower() for m in messages)
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_max_cost_cents_below_min_fails_preflight(
+    mock_execute: AsyncMock,
+) -> None:
+    """Codex audit (2026-04-17): max_cost_cents < Exa's 0.7 min must error BEFORE calling.
+
+    Previous behaviour: max_cost_cents declared in schema but not enforced.
+    Fixed: pre-call enforcement against known backend minimums.
+    """
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    result = await fn("question", None, {"max_cost_cents": 0.5})  # Exa min is 0.7
+
+    # Must error out pre-call
+    assert result.get("error") is not None
+    assert result["error"]["code"] == "quota_exceeded"
+    # execute_research must NOT have been called — budget check is pre-flight
+    mock_execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch("refcast.tools.research.execute_research")
+async def test_research_max_cost_cents_post_call_overrun_warns(
+    mock_execute: AsyncMock,
+) -> None:
+    """If actual cost exceeded budget (variable Gemini cost), warn post-call."""
+    overrun = _ok_result("exa")
+    overrun["cost_cents"] = 2.5  # simulated overrun
+    mock_execute.return_value = overrun
+
+    exa = _mock_backend("exa", frozenset({"search", "cite"}))
+    mcp, captured = _mock_mcp()
+    register(mcp, {"exa": exa})
+    fn = captured["research"]
+    # Budget 1.0 > Exa min 0.7 (passes pre-flight) but actual 2.5 exceeds 1.0
+    result = await fn("question", None, {"max_cost_cents": 1.0})
+
+    assert result.get("error") is None  # result still returned — already spent
+    messages = [w.get("message", "").lower() for w in result.get("warnings", [])]
+    assert any("actual cost" in m and "exceeded" in m for m in messages), (
+        f"No overrun warning found in: {messages}"
+    )
 
 
 @pytest.mark.asyncio

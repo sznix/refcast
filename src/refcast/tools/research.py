@@ -5,13 +5,19 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from refcast.backends.base import BackendError
+from refcast.evidence import build_evidence_pack
 from refcast.merge import merge_citations
 from refcast.models import RecoveryEnum, ResearchConstraints, StructuredError
 from refcast.perspectives import generate_perspectives
-from refcast.router import execute_research
+from refcast.router import execute_research, select_backends
 from refcast.size_guard import enforce_response_size
 from refcast.synthesizer import synthesize
-from refcast.tools._utils import err_from_backend
+from refcast.tools._utils import err_envelope, err_from_backend
+
+# Known per-query minimum costs for pre-flight budget enforcement.
+# Exa: fixed 0.7 cents/query (exa-py pricing).
+# Gemini FS: variable by tokens; 0.05 is a conservative floor for a trivial query.
+_BACKEND_MIN_COSTS: dict[str, float] = {"exa": 0.7, "gemini_fs": 0.05}
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -56,36 +62,23 @@ def register(
         partial_warning: StructuredError | None = None
         unenforced_warnings: list[StructuredError] = []
 
-        # BUG 5: Warn about unenforced constraint fields
-        if constraints is not None:
-            if constraints.get("max_cost_cents") is not None:
-                unenforced_warnings.append(
-                    {
-                        "code": RecoveryEnum.UNKNOWN,
-                        "message": "max_cost_cents is not enforced in v0.2. It will be ignored.",
-                        "recovery_hint": "Remove max_cost_cents or wait for a future version.",
-                        "recovery_action": "user_action",
-                        "fallback_used": False,
-                        "partial_results": False,
-                        "retry_after_ms": None,
-                        "backend": None,
-                        "raw": {},
-                    }
-                )
-            if constraints.get("date_after") is not None:
-                unenforced_warnings.append(
-                    {
-                        "code": RecoveryEnum.UNKNOWN,
-                        "message": "date_after is not enforced in v0.2. It will be ignored.",
-                        "recovery_hint": "Remove date_after or wait for a future version.",
-                        "recovery_action": "user_action",
-                        "fallback_used": False,
-                        "partial_results": False,
-                        "retry_after_ms": None,
-                        "backend": None,
-                        "raw": {},
-                    }
-                )
+        # Unenforced-constraint warnings. max_cost_cents IS enforced as of
+        # Codex audit 2026-04-17 — pre-flight budget check + post-call overrun
+        # warning happen below. date_after remains unenforced until v0.4.
+        if constraints is not None and constraints.get("date_after") is not None:
+            unenforced_warnings.append(
+                {
+                    "code": RecoveryEnum.UNKNOWN,
+                    "message": "date_after is not enforced in v0.2. It will be ignored.",
+                    "recovery_hint": "Remove date_after or wait for a future version.",
+                    "recovery_action": "user_action",
+                    "fallback_used": False,
+                    "partial_results": False,
+                    "retry_after_ms": None,
+                    "backend": None,
+                    "raw": {},
+                }
+            )
 
         # Pre-flight corpus-state check when a corpus_id is provided.
         # Skip preflight if user explicitly chose a non-corpus backend (e.g. Exa).
@@ -146,6 +139,33 @@ def register(
             else None
         )
 
+        # Codex audit (2026-04-17): pre-flight budget enforcement for max_cost_cents.
+        # Previously declared in schema but never enforced.
+        max_cost_budget: float | None = None
+        if constraints is not None and constraints.get("max_cost_cents") is not None:
+            raw_budget = constraints["max_cost_cents"]
+            if isinstance(raw_budget, int | float):
+                max_cost_budget = float(raw_budget)
+                candidates = select_backends(corpus_id, typed_constraints, backends)
+                if candidates:
+                    cheapest = min(_BACKEND_MIN_COSTS.get(b.id, 0.0) for b in candidates)
+                    if cheapest > max_cost_budget:
+                        return err_envelope(
+                            (
+                                f"max_cost_cents={max_cost_budget} is below known minimum "
+                                f"{cheapest} for available backends "
+                                f"({', '.join(sorted(b.id for b in candidates))})"
+                            ),
+                            code="quota_exceeded",
+                            recovery_action="user_action",
+                            backend=None,
+                            raw={
+                                "max_cost_cents": max_cost_budget,
+                                "min_backend_cost": cheapest,
+                                "candidates": sorted(b.id for b in candidates),
+                            },
+                        )
+
         depth = (typed_constraints or {}).get("depth", "quick")
 
         if depth == "deep" and _gemini_api_key:
@@ -156,6 +176,25 @@ def register(
             out = await _quick_research(
                 query, corpus_id, typed_constraints, backends, _gemini_api_key
             )
+            # Codex audit (2026-04-17): user asked for deep but we silently
+            # fell through to quick because Gemini key is missing. Surface it.
+            if depth == "deep" and not _gemini_api_key:
+                downgrade_warning: StructuredError = {
+                    "code": RecoveryEnum.UNKNOWN,
+                    "message": ("depth='deep' requires GEMINI_API_KEY; downgraded to quick mode."),
+                    "recovery_hint": (
+                        "Configure GEMINI_API_KEY to enable multi-perspective deep mode."
+                    ),
+                    "recovery_action": "user_action",
+                    "fallback_used": False,
+                    "partial_results": True,
+                    "retry_after_ms": None,
+                    "backend": None,
+                    "raw": {"requested_depth": "deep", "effective_depth": "quick"},
+                }
+                downgrade_warnings: list[StructuredError] = list(out.get("warnings") or [])
+                downgrade_warnings.append(downgrade_warning)
+                out["warnings"] = downgrade_warnings
 
         if partial_warning is not None:
             existing_warnings = out.get("warnings") or []
@@ -168,7 +207,50 @@ def register(
             uw_list.extend(unenforced_warnings)
             out["warnings"] = uw_list
 
-        return enforce_response_size(out)
+        # Post-call budget overrun — variable-cost backends (Gemini) may exceed
+        # what pre-flight minimums predicted. Surface it loudly, but don't fail
+        # (the money is already spent).
+        if max_cost_budget is not None and out.get("error") is None:
+            actual_cost = float(out.get("cost_cents", 0.0))
+            if actual_cost > max_cost_budget:
+                overrun: StructuredError = {
+                    "code": RecoveryEnum.UNKNOWN,
+                    "message": (
+                        f"Actual cost {actual_cost} cents exceeded "
+                        f"max_cost_cents={max_cost_budget}. Request already executed; "
+                        f"tighten budget or use a cheaper backend next time."
+                    ),
+                    "recovery_hint": (
+                        "Set preferred_backend to the cheapest option, or raise max_cost_cents."
+                    ),
+                    "recovery_action": "user_action",
+                    "fallback_used": False,
+                    "partial_results": False,
+                    "retry_after_ms": None,
+                    "backend": out.get("backend_used"),
+                    "raw": {
+                        "actual_cost_cents": actual_cost,
+                        "max_cost_cents": max_cost_budget,
+                    },
+                }
+                overrun_list: list[StructuredError] = list(out.get("warnings") or [])
+                overrun_list.append(overrun)
+                out["warnings"] = overrun_list
+
+        # v0.3 primitive: attach Reproducible Evidence Transcript AFTER size_guard
+        # so source_cids match the actually-returned citations (size_guard may have
+        # truncated citations for size reasons).
+        out = enforce_response_size(out)
+        if out.get("error") is None:
+            backend_ids = [
+                s.strip() for s in (out.get("backend_used") or "").split(",") if s.strip()
+            ]
+            out["evidence_pack"] = build_evidence_pack(
+                result=out,
+                query=query,
+                backends=[{"id": bid} for bid in backend_ids],
+            )
+        return out
 
 
 async def _quick_research(
