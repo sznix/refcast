@@ -60,6 +60,34 @@ async def test_generate_perspectives_fallback_on_failure():
     assert results == [original_query]
 
 
+def test_perspective_prompt_contains_domain_disambiguation():
+    """Codex audit (2026-04-17): prompt must instruct the model to disambiguate
+    acronyms (e.g. 'MCP' → 'Model Context Protocol', not 'Minecraft Protocol')
+    BEFORE generating sub-queries. Previously the prompt was context-free, which
+    produced Minecraft-themed sub-queries for a Model-Context-Protocol question.
+
+    This is a prompt-quality assertion, not a model-behaviour test.
+    """
+    from refcast.perspectives import PERSPECTIVE_PROMPT
+
+    lowered = PERSPECTIVE_PROMPT.lower()
+    # Must instruct disambiguation
+    assert "disambiguat" in lowered or "domain" in lowered, (
+        "PERSPECTIVE_PROMPT must include domain/acronym disambiguation instruction"
+    )
+    # Must steer the model to stay WITHIN the identified domain
+    assert "within" in lowered or "stay" in lowered or "same domain" in lowered
+
+
+@pytest.mark.asyncio
+async def test_generate_perspectives_passes_query_into_prompt():
+    """The formatted prompt must include the actual query text."""
+    from refcast.perspectives import PERSPECTIVE_PROMPT
+
+    formatted = PERSPECTIVE_PROMPT.format(query="What is MCP?", n=4)
+    assert "What is MCP?" in formatted
+
+
 @pytest.mark.asyncio
 async def test_generate_perspectives_filters_empty_lines():
     fake_text = (
