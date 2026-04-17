@@ -6,6 +6,7 @@ import platform
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -78,6 +79,60 @@ def auth(
         typer.echo(f"Stored in {env_path}.")
     else:
         typer.echo(f"Unknown --store: {store}", err=True)
+        raise typer.Exit(code=1)
+
+
+_VERIFY_PATH_ARG = typer.Argument(..., help="Path to a JSON file containing an EvidencePack")
+
+
+@app.command()
+def verify(path: Path = _VERIFY_PATH_ARG) -> None:
+    """Offline-verify a saved EvidencePack.
+
+    Exit code 0 if the pack is valid, 1 if invalid or malformed.
+    Pure offline — no network, no API keys required.
+    """
+    import json as _json  # noqa: PLC0415
+
+    from refcast.evidence import verify_evidence_pack  # noqa: PLC0415
+
+    if not path.exists():
+        typer.echo(f"ERROR: file not found: {path}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        data = _json.loads(path.read_text())
+    except _json.JSONDecodeError as e:
+        typer.echo(f"ERROR: not valid JSON: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    # Accept either a raw EvidencePack or a full ResearchResult with .evidence_pack
+    pack_candidate: object
+    if isinstance(data, dict) and "evidence_pack" in data:
+        pack_candidate = data["evidence_pack"]
+    else:
+        pack_candidate = data
+
+    if not isinstance(pack_candidate, dict):
+        typer.echo("ERROR: pack is not a dict", err=True)
+        raise typer.Exit(code=1)
+
+    pack: dict[str, Any] = pack_candidate
+    valid, errors = verify_evidence_pack(pack)
+    if valid:
+        backends_list: list[dict[str, Any]] = pack.get("backends_used") or []
+        backends_str = ", ".join(b.get("id", "?") for b in backends_list)
+        typer.echo("Valid: transcript_cid matches canonical form")
+        typer.echo(f"  transcript_cid: {pack.get('transcript_cid')}")
+        typer.echo(f"  citations:      {pack.get('citations_count')}")
+        typer.echo(f"  backends:       {backends_str}")
+        typer.echo(f"  timestamp:      {pack.get('timestamp')}")
+        typer.echo(f"  cost:           {pack.get('cost_cents')} cents")
+        raise typer.Exit(code=0)
+    else:
+        typer.echo("INVALID: pack failed verification", err=True)
+        for err in errors:
+            typer.echo(f"  - {err}", err=True)
         raise typer.Exit(code=1)
 
 

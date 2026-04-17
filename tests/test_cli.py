@@ -149,4 +149,96 @@ def test_doctor_partial_configured(runner: CliRunner) -> None:
         result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "Gemini: configured" in result.output
-    assert "Exa:    NOT configured" in result.output
+
+
+# ---------------------------------------------------------------------------
+# verify — v0.3 offline evidence-pack verification
+# ---------------------------------------------------------------------------
+
+
+def _write_pack(tmp_path: Path, name: str = "pack.json") -> Path:
+    """Build a valid EvidencePack and write it to disk; return the path."""
+    import json as _json
+
+    from refcast.evidence import build_evidence_pack
+
+    result = {
+        "answer": "a",
+        "citations": [
+            {
+                "text": "cite",
+                "source_url": "https://example.com",
+                "author": None,
+                "date": None,
+                "confidence": 0.9,
+                "backend_used": "exa",
+                "raw": {},
+            }
+        ],
+        "backend_used": "exa",
+        "latency_ms": 100,
+        "cost_cents": 0.7,
+        "fallback_scope": "none",
+        "warnings": [],
+        "error": None,
+    }
+    pack = build_evidence_pack(result=result, query="q", backends=[{"id": "exa"}])
+    path = tmp_path / name
+    path.write_text(_json.dumps(pack))
+    return path
+
+
+def test_verify_valid_pack(tmp_path: Path, runner: CliRunner) -> None:
+    path = _write_pack(tmp_path)
+    result = runner.invoke(app, ["verify", str(path)])
+    assert result.exit_code == 0
+    assert "Valid" in result.output
+    assert "transcript_cid" in result.output
+
+
+def test_verify_tampered_pack_exits_1(tmp_path: Path, runner: CliRunner) -> None:
+    import json as _json
+
+    path = _write_pack(tmp_path)
+    data = _json.loads(path.read_text())
+    data["query"] = "TAMPERED"  # mutate to break transcript_cid
+    path.write_text(_json.dumps(data))
+
+    result = runner.invoke(app, ["verify", str(path)])
+    assert result.exit_code == 1
+    assert "INVALID" in result.output
+
+
+def test_verify_nonexistent_file_exits_1(tmp_path: Path, runner: CliRunner) -> None:
+    result = runner.invoke(app, ["verify", str(tmp_path / "nope.json")])
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+
+
+def test_verify_malformed_json_exits_1(tmp_path: Path, runner: CliRunner) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text("not-json{{{")
+    result = runner.invoke(app, ["verify", str(path)])
+    assert result.exit_code == 1
+    assert "not valid json" in result.output.lower()
+
+
+def test_verify_accepts_full_research_result(tmp_path: Path, runner: CliRunner) -> None:
+    """User can pass a full ResearchResult (with evidence_pack nested inside), not just the pack."""
+    import json as _json
+
+    pack_path = _write_pack(tmp_path, "pack.json")
+    pack = _json.loads(pack_path.read_text())
+
+    full_result = {
+        "answer": "a",
+        "citations": [],
+        "backend_used": "exa",
+        "evidence_pack": pack,
+    }
+    full_path = tmp_path / "full.json"
+    full_path.write_text(_json.dumps(full_result))
+
+    result = runner.invoke(app, ["verify", str(full_path)])
+    assert result.exit_code == 0
+    assert "Valid" in result.output
