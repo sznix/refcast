@@ -16,6 +16,7 @@ from refcast.tools import (
     corpus_status,
     corpus_upload,
     research,
+    research_verify,
 )
 
 
@@ -48,6 +49,7 @@ def build_server() -> FastMCP:
     corpus_list.register(mcp, backends)
     corpus_delete.register(mcp, backends)
     research.register(mcp, backends, gemini_api_key=gemini_api_key)
+    research_verify.register(mcp)
 
     return mcp
 
