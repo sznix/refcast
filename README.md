@@ -2,9 +2,11 @@
 
 # Refcast
 
-**Cast once. Cite anywhere.**
+**Cast once. Cite anywhere. Verify offline.**
 
-An open-source MCP server that sends your research queries to multiple backends — if one goes down, the next one picks up automatically, and your citations come back in the same shape every time. Answers include inline `[1]` `[2]` citation markers synthesized from source evidence, with an optional `depth="deep"` mode that fans out into multiple perspectives for comprehensive coverage. Works with Claude Code, Cursor, Gemini CLI, and any MCP client.
+An open-source MCP server that sends your research queries to multiple backends — if one goes down, the next one picks up automatically, and your citations come back in the same shape every time. Answers include inline `[1]` `[2]` citation markers synthesized from source evidence, with an optional `depth="deep"` mode that fans out into multiple perspectives for comprehensive coverage. **Every `research()` call attaches an integrity-verifiable `EvidencePack`** you can re-check offline with `refcast verify` or the `research.verify` MCP tool — no network, no API keys, no refcast service. Works with Claude Code, Cursor, Gemini CLI, and any MCP client.
+
+> **About the verifier's scope** — `research.verify` and `refcast verify` prove *integrity* (the envelope has not been mutated since emission). They do **NOT** prove the citations are factually correct, do **NOT** bind citations to the envelope (consumers must re-hash `(url, text)` against `source_cids` out-of-band), and do **NOT** prove the pack came from refcast (no signature in v0.3). See [`SECURITY.md`](SECURITY.md) for the full scope disclaimer.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
@@ -113,7 +115,7 @@ Register the server with command `refcast-mcp` (stdio transport). Consult your c
 
 ## What you get
 
-### 5 MCP tools
+### 6 MCP tools
 
 | Tool | What it does |
 |:-----|:-------------|
@@ -121,7 +123,8 @@ Register the server with command `refcast-mcp` (stdio transport). Consult your c
 | `corpus.status(corpus_id)` | Check indexing progress. Poll until `indexed: true`. |
 | `corpus.list()` | List all your corpora with file counts and sizes. |
 | `corpus.delete(corpus_id)` | Remove a corpus and all its files. |
-| **`research(query)`** | **The main tool.** Routes query across backends, returns unified citations with inline `[1]` `[2]` markers. Pass `constraints={"depth": "deep"}` for multi-perspective research. |
+| **`research(query)`** | **The main producer.** Routes query across backends, returns unified citations with inline `[1]` `[2]` markers + an `evidence_pack` you can verify offline. Pass `constraints={"depth": "deep"}` for multi-perspective research. |
+| **`research.verify(evidence_pack)`** | **Pure-offline integrity verifier.** Takes an `evidence_pack` saved from a prior `research()` call; returns `{integrity_valid, binding_verified: false, authenticity_verified: false, errors, transcript_cid, scope_note}`. No network, no API keys, works on airgapped machines. Also exposed as a CLI: `refcast verify <file.json>`. |
 
 ### Unified citation envelope
 
@@ -274,8 +277,25 @@ Both Gemini and Exa have generous free tiers. No credit card required to start.
 |:--------|:-------|:-----------|
 | **v0.1** | **Shipped** | 5 tools, 2 backends, serial fallback, unified citations, structured errors |
 | **v0.2** | **Shipped** | Answer synthesis with `[1]` `[2]` markers, `depth="deep"` multi-perspective research, citation deduplication |
-| v0.3 | Planned | NotebookLM Enterprise API backend, statistical drift detection, idempotency |
-| v0.4 | Future | Formally-bounded semantic cache, plugin auth strategies, cost governance |
+| **v0.3** | **Shipped** | `EvidencePack` on every `research()` result, `research.verify` MCP tool, `refcast verify` CLI, integrity-only scope with explicit disclaimers, 6th MCP tool |
+| v0.4 | Planned | Optional detached signatures (authenticity layer), NotebookLM Enterprise backend, drift detection, request idempotency key, RFC 8785 JCS migration path |
+| v0.5 | Future | Formally-bounded semantic cache, plugin auth strategies, cost governance, C2PA manifest wrapping |
+
+## Prior art (v0.3 primitive)
+
+refcast's `EvidencePack` + `research.verify` pair is **not a novel cryptographic primitive**. It composes well-known components (SHA-256, canonical JSON, Haber-Stornetta-style hash-linked timestamping) and applies them to MCP research output. Adjacent shipped systems worth knowing:
+
+| System | What it is | How it differs from refcast |
+|:-------|:-----------|:----------------------------|
+| [**AGA MCP Server v2.1.0**](https://github.com/attestedintelligence/aga-mcp-server) | MCP governance proxy with `aga_verify_bundle` offline verifier | Ed25519 + proper RFC 8785 JCS + Merkle trees; provider-agnostic (wraps any MCP tool, not first-party research) |
+| [**PapersFlow MCP**](https://github.com/papersflow-ai/papersflow-mcp) | MCP server with `verify_citation` + `search_literature` | Verification is a **hosted** HTTP call to `doxa.papersflow.ai` (requires network, auth); refcast's verifier is pure offline |
+| [**citecheck**](https://arxiv.org/html/2603.17339) (arXiv 2603.17339) | MCP server for bibliography repair | Validates against live PubMed/Crossref/arXiv (requires network); scope is bibliographic, not multi-source research synthesis |
+| [**C2PA 2.2**](https://spec.c2pa.org/specifications/specifications/2.2/specs/C2PA_Specification.html) | W3C-aligned content provenance (media) | X.509 signed manifests; targets images/audio/video, not research text; not MCP-native |
+| [**IETF SCITT**](https://datatracker.ietf.org/doc/draft-ietf-scitt-architecture/) | Supply-chain integrity transparency | Ledger-based signed transparent statements; not MCP; not research-output-shaped |
+| [**W3C VC 2.0**](https://www.w3.org/TR/vc-data-model-2.0/) | Verifiable Credentials | Signature-based credential envelope; not research-output-shaped; not MCP |
+| [**RAGIX**](https://github.com/ovitrac/RAGIX) | Local-first MCP RAG with Merkle provenance | No dedicated research-producer + integrity-verifier pair |
+
+As of April 2026, refcast is the first-party-bundled MCP pattern we are aware of — a research producer plus a pure-offline integrity verifier in one package, with explicit integrity-only scope. This is a **priority claim, not a moat**. The construction is ~180 LOC of core code; a competitor matching refcast's shortcuts can ship in a few days. refcast's durable value is in *productization*: fallback taxonomy, structured error recovery, backend catalog, synthesis quality, and the discipline of explicit scope. If you need cryptographic authenticity today, prefer AGA MCP Server composed with your research MCP of choice.
 
 ## Privacy & safety
 
@@ -309,18 +329,19 @@ mypy src/refcast/                 # strict mode
 ```
 src/refcast/
   backends/         # BackendAdapter implementations (gemini_fs.py, exa.py)
-  tools/            # MCP tool handlers (corpus_upload.py, research.py, ...)
+  tools/            # MCP tool handlers (corpus_upload.py, research.py, research_verify.py, ...)
   router.py         # Serial fallback orchestrator + scope classifier
   models.py         # TypedDicts, RecoveryEnum, Citation, ResearchResult
+  evidence.py       # v0.3 primitive: canonical_json, source_cid, transcript_cid, verify_evidence_pack
   config.py         # Credential loading (dotenv + keyring chain)
   size_guard.py     # 25KB response cap enforcement
-  mcp.py            # FastMCP server entry point
-  cli.py            # refcast init / auth / doctor
+  mcp.py            # FastMCP server entry point (6 tools)
+  cli.py            # refcast init / auth / doctor / verify
 ```
 
 ### Testing
 
-152 unit tests with `respx` HTTP mocking + 5 gated integration tests against real APIs. CI runs on Python 3.11/3.12/3.13 across Ubuntu and macOS.
+~230 unit tests with `respx` HTTP mocking + integration tests against real APIs (gated behind env vars). CI runs on Python 3.11/3.12/3.13 across Ubuntu and macOS. Scope-regression guards (`tests/test_integrity_scope.py`) assert the v0.3 integrity-only scope: no signing imports in the evidence path, no network imports in the verifier, and both `research` + `research.verify` registered as independently-callable MCP tools.
 
 ```bash
 pytest -m "not integration" -q     # fast, no API keys needed

@@ -1,13 +1,32 @@
-"""Reproducible Evidence Transcript — content-addressed, tamper-evident research provenance.
+"""Reproducible Evidence Transcript — hash-identified, integrity-verifiable research envelope.
 
-v0.3 primitive (design: 2026-04-17 research note + plan).
+v0.3 primitive. Scope is deliberately narrow:
 
-A `ResearchResult` can be accompanied by an `EvidencePack` that:
-- Binds every citation's URL + text to a sha256 content ID (`source_cid`)
-- Computes a sha256 over the canonical JSON of the whole pack (`transcript_cid`)
-- Can be verified OFFLINE with no API key, no network, no refcast service
+- **Integrity**: the envelope has not been mutated since emission. `verify_evidence_pack`
+  returns `valid=True` iff the stored `transcript_cid` matches a fresh recomputation.
+- **NOT authenticity**: there is no signer identity, no signature, no PKI. Anyone can
+  produce a well-formed pack with any `query` / `source_cids` / `answer`. The verifier
+  does not prove provenance.
+- **NOT citation-binding**: `source_cid = sha256(url + "\\n" + text)` is computed at
+  build time, but the underlying `(url, text)` pairs are NOT retained in the envelope.
+  A consumer who receives `citations[]` + `evidence_pack` and wants to verify they
+  correspond MUST re-hash each citation against `source_cids` out-of-band —
+  `verify_evidence_pack` does not perform that step.
+- **NOT content-addressed** in the Git/IPFS sense: there is no retrieval store keyed
+  on the CID. The hash is an identity for integrity-checking, not an addressing
+  scheme into a content-addressable store.
 
-This is the substrate the v0.4 replay + v0.5 diff operators will build on.
+Uses SHA-256 over a canonical JSON encoding (`sort_keys=True, ensure_ascii=True,
+separators=(",",":")`). **Not RFC 8785 JCS-compliant** — JCS number normalization
+and UTF-8 escaping are deliberately not implemented. Cross-language verifiers must
+replicate the exact Python encoding or they will diverge on edge cases (IEEE 754
+numbers, surrogate pairs).
+
+Prior art: RFC 8785 JCS · Haber-Stornetta hash-linked timestamping · C2PA 2.2 ·
+IETF SCITT · W3C VC 2.0 · AGA MCP Server v2.1.0. This module composes well-known
+primitives; nothing in it is novel cryptography. The refcast contribution is the
+first-party-bundled MCP pairing (research tool + pure-offline integrity verifier),
+not the primitives themselves.
 """
 
 from __future__ import annotations
@@ -77,10 +96,16 @@ def build_evidence_pack(
     query: str,
     backends: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build a tamper-evident EvidencePack from a `ResearchResult`.
+    """Build an integrity-verifiable EvidencePack from a `ResearchResult`.
 
     `backends` is the list of backend descriptors that actually participated,
     e.g. ``[{"id": "exa", "version": "2.12.0", "params_hash": "..."}]``.
+
+    The resulting pack is hash-identified (the `transcript_cid` is a self-contained
+    identifier) but NOT signed and NOT bound to a signer identity. The (url, text)
+    pairs from citations are hashed into `source_cids` but not retained in the pack;
+    binding from citations shown to the consumer back to the envelope requires
+    out-of-band re-hashing. See module docstring for the full scope disclaimer.
     """
     citations = result.get("citations") or []
     source_cids: list[str] = [
@@ -102,17 +127,29 @@ def build_evidence_pack(
 
 
 def verify_evidence_pack(pack: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Pure offline verification of an EvidencePack.
+    """Pure offline **integrity** verification of an EvidencePack.
 
-    Returns ``(valid, errors)`` where `errors` is a list of human-readable reasons
-    for invalidity. ``valid=True`` iff `errors == []`.
+    Returns ``(integrity_valid, errors)``. ``integrity_valid=True`` iff the pack's
+    recomputed `transcript_cid` matches the stored one AND required fields are
+    present AND `citations_count` agrees with `len(source_cids)`.
+
+    **What a `True` result proves**: the pack's bytes have not been mutated since
+    emission.
+
+    **What a `True` result does NOT prove**:
+    - Citations shown to the consumer correspond to the pack (citation binding
+      requires re-hashing each citation against `source_cids` out-of-band).
+    - The pack was produced by refcast or any specific party (no signature, no PKI).
+    - The answer or citations are factually correct.
 
     Checks (in order):
     1. `transcript_cid` field is present.
-    2. `citations_count` matches `len(source_cids)`.
-    3. Recomputed transcript_cid equals the stored one.
+    2. Required scalar fields are present.
+    3. `citations_count` matches `len(source_cids)`.
+    4. Recomputed transcript_cid equals the stored one.
 
-    This function never raises — all failure modes return `(False, [...])`.
+    This function is pure: no network, no credentials, no server state. It never
+    raises — all failure modes return `(False, [...])`.
     """
     errors: list[str] = []
     if not isinstance(pack, dict):

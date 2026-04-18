@@ -87,10 +87,14 @@ _VERIFY_PATH_ARG = typer.Argument(..., help="Path to a JSON file containing an E
 
 @app.command()
 def verify(path: Path = _VERIFY_PATH_ARG) -> None:
-    """Offline-verify a saved EvidencePack.
+    """Offline **integrity** verification of a saved EvidencePack.
 
-    Exit code 0 if the pack is valid, 1 if invalid or malformed.
+    Exit code 0 if the pack's integrity is valid, 1 if invalid or malformed.
     Pure offline — no network, no API keys required.
+
+    Scope: integrity only. This does NOT prove citations are correct, does NOT
+    bind citations to the envelope (consumer must re-hash out-of-band), and
+    does NOT prove the pack came from refcast (no signature, no signer).
     """
     import json as _json  # noqa: PLC0415
 
@@ -118,19 +122,21 @@ def verify(path: Path = _VERIFY_PATH_ARG) -> None:
         raise typer.Exit(code=1)
 
     pack: dict[str, Any] = pack_candidate
-    valid, errors = verify_evidence_pack(pack)
-    if valid:
+    integrity_valid, errors = verify_evidence_pack(pack)
+    if integrity_valid:
         backends_list: list[dict[str, Any]] = pack.get("backends_used") or []
         backends_str = ", ".join(b.get("id", "?") for b in backends_list)
-        typer.echo("Valid: transcript_cid matches canonical form")
-        typer.echo(f"  transcript_cid: {pack.get('transcript_cid')}")
-        typer.echo(f"  citations:      {pack.get('citations_count')}")
-        typer.echo(f"  backends:       {backends_str}")
-        typer.echo(f"  timestamp:      {pack.get('timestamp')}")
-        typer.echo(f"  cost:           {pack.get('cost_cents')} cents")
+        typer.echo("Integrity-valid: transcript_cid matches canonical form")
+        typer.echo(f"  transcript_cid:          {pack.get('transcript_cid')}")
+        typer.echo(f"  citations:               {pack.get('citations_count')}")
+        typer.echo(f"  backends:                {backends_str}")
+        typer.echo(f"  timestamp:               {pack.get('timestamp')}")
+        typer.echo(f"  cost:                    {pack.get('cost_cents')} cents")
+        typer.echo("  binding_verified:        False (re-hash citations to confirm)")
+        typer.echo("  authenticity_verified:   False (no signer in v0.3)")
         raise typer.Exit(code=0)
     else:
-        typer.echo("INVALID: pack failed verification", err=True)
+        typer.echo("INVALID: pack failed integrity verification", err=True)
         for err in errors:
             typer.echo(f"  - {err}", err=True)
         raise typer.Exit(code=1)

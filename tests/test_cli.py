@@ -192,8 +192,12 @@ def test_verify_valid_pack(tmp_path: Path, runner: CliRunner) -> None:
     path = _write_pack(tmp_path)
     result = runner.invoke(app, ["verify", str(path)])
     assert result.exit_code == 0
-    assert "Valid" in result.output
+    assert "Integrity-valid" in result.output
     assert "transcript_cid" in result.output
+    # Scope discipline: the CLI must always show the binding/authenticity gaps
+    # so users cannot mistake integrity for truthfulness (R5.1 regression guard).
+    assert "binding_verified" in result.output
+    assert "authenticity_verified" in result.output
 
 
 def test_verify_tampered_pack_exits_1(tmp_path: Path, runner: CliRunner) -> None:
@@ -241,4 +245,4 @@ def test_verify_accepts_full_research_result(tmp_path: Path, runner: CliRunner) 
 
     result = runner.invoke(app, ["verify", str(full_path)])
     assert result.exit_code == 0
-    assert "Valid" in result.output
+    assert "Integrity-valid" in result.output

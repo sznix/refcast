@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.0] — 2026-04-17
+
+**Reproducible Evidence Transcript.** Every `research()` call now attaches a hash-identified, integrity-verifiable envelope, with a pure-offline `research.verify` tool you can hand to any reviewer.
+
+### Scope
+
+This release adds an **integrity-only** primitive — it proves the envelope has not been mutated since emission. It does NOT prove citations are correct, does NOT bind citations to the envelope (the consumer must re-hash citations against `source_cids` out-of-band), and does NOT constitute authenticity (there is no signature, no signer identity). See `SECURITY.md` and the verifier docstring for the exact scope.
+
+### Added
+
+- **`EvidencePack`** attached to every successful `research()` result: query + backends used + per-citation `source_cid = sha256(url + "\n" + text)` + `transcript_cid = sha256(canonical JSON of the pack minus transcript_cid itself)` + cost + latency + env fingerprint (refcast version, Python version, platform).
+- **`research.verify`** — a new MCP tool, a pure function of the input pack: no network, no credentials, no server state. Returns a structured verdict `{integrity_valid, binding_verified: false, authenticity_verified: false, errors, transcript_cid}` that is explicit about the scope (integrity only; citation binding and authenticity are out of scope in v0.3).
+- **`refcast verify <file>`** — CLI wrapper: exit 0 on integrity-valid, exit 1 otherwise, identical semantics to the MCP tool. Works offline.
+- **Canonical JSON encoding** — `sort_keys=True`, `ensure_ascii=True`, compact separators. Deterministic across Python runtimes on the same machine; **not RFC 8785 JCS-compliant** (JCS number normalization and UTF-8 escaping are deliberately not implemented). Cross-language verifiers must replicate the exact Python encoding.
+- **Regression guards**: test asserting absence of signing-related imports in the evidence path, test asserting both `research` and `research.verify` are registered as independently-callable MCP tools. These prevent silent drift from integrity-only to authenticity-claiming, and prevent silent deletion of the verifier tool.
+
+### Changed
+
+- `research.verify` return shape: `{valid, errors, transcript_cid}` → `{integrity_valid, binding_verified: false, authenticity_verified: false, errors, transcript_cid}`. Downstream consumers treating the old `valid=True` as "citations proven correct" will now see an explicit `binding_verified: false` field that names the gap.
+- README rewritten: lead with integrity disclaimer (not a truthfulness claim), enumerate all six registered MCP tools (four corpus-management + two research), list prior art (AGA MCP Server, PapersFlow MCP, citecheck).
+- `evidence.py` module docstring: "content-addressed, tamper-evident" → "hash-identified, integrity-verifiable" (accurate — there is no CID retrieval store; only a self-verifying digest).
+
+### Prior art
+
+Not a novel cryptographic primitive. The construction composes well-known components: RFC 8785 JCS (approximated, not compliant) · SHA-256 · Haber-Stornetta hash-linked timestamping. Adjacent shipped systems: **AGA MCP Server v2.1.0** (Attested Intelligence — Ed25519 + proper JCS + Merkle, governance-proxy shape), **PapersFlow MCP** (hosted verify), **citecheck** (arXiv 2603.17339 — online bibliographic verification), C2PA 2.2, IETF SCITT, W3C VC 2.0. refcast is positioned as a first-party-bundled research producer + integrity verifier in one MCP package; priority claim, not a moat.
+
+### Notes
+
+- The underlying `(url, text)` pairs are not retained in the envelope; only their `source_cid`s are. If a downstream consumer needs to verify that the citations they see correspond to the pack they received, they must re-hash each citation and compare — `research.verify` does not perform that step.
+- SHA-256 integrity holds through ~2035 per NIST IR 8547. Algorithm-agility is not yet implemented.
+
 ## [0.2.0] — 2026-04-15
 
 **Answers with teeth.** Research results now come back with inline `[1]` `[2]` citation markers and a new `depth` parameter for multi-perspective deep research.
