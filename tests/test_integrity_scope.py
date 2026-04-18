@@ -31,23 +31,23 @@ EVIDENCE_PATH_FILES = [
 # Module names that would imply authenticity-level crypto (signatures, PKI).
 # sha256/hmac-less hashing via `hashlib` is fine; signing modules are not.
 SIGNING_MODULES = {
-    "cryptography",              # asymmetric crypto suite
+    "cryptography",  # asymmetric crypto suite
     "cryptography.hazmat",
-    "Crypto",                    # pycryptodome
-    "nacl",                      # PyNaCl (Ed25519/Curve25519)
+    "Crypto",  # pycryptodome
+    "nacl",  # PyNaCl (Ed25519/Curve25519)
     "pysodium",
     "ecdsa",
-    "rsa",                       # standalone RSA library (not the RFC, the package)
+    "rsa",  # standalone RSA library (not the RFC, the package)
     "gnupg",
     "pgpy",
     "ed25519",
-    "cose",                      # COSE signatures
-    "jose",                      # JOSE / JWS / JWT
+    "cose",  # COSE signatures
+    "jose",  # JOSE / JWS / JWT
     "python_jose",
     "jwcrypto",
     "pycryptodome",
     "pycryptodomex",
-    "keyring",                   # keyring access would imply credential binding
+    "keyring",  # keyring access would imply credential binding
 }
 
 
@@ -102,9 +102,7 @@ def test_no_network_imports_in_verifier() -> None:
         bad = imports & network_modules
         if bad:
             offenders[str(path)] = bad
-    assert not offenders, (
-        "Verifier must be pure offline. Found network imports: " + str(offenders)
-    )
+    assert not offenders, "Verifier must be pure offline. Found network imports: " + str(offenders)
 
 
 async def _registered_tool_names(mcp_instance: Any) -> set[str]:
@@ -139,8 +137,8 @@ async def test_build_server_registers_research_verify(
     mcp = build_server()
     tool_names = await _registered_tool_names(mcp)
 
-    assert "research" in tool_names, (
-        "Expected `research` to be registered; got: " + str(sorted(tool_names))
+    assert "research" in tool_names, "Expected `research` to be registered; got: " + str(
+        sorted(tool_names)
     )
     assert "research.verify" in tool_names, (
         "Expected `research.verify` to be registered alongside `research`; "

@@ -121,8 +121,14 @@ async def test_verify_tool_schema_always_has_scope_fields() -> None:
 
     # Valid pack
     result = await fn(_valid_pack())
-    for key in ("integrity_valid", "binding_verified", "authenticity_verified", "errors",
-                "transcript_cid", "scope_note"):
+    for key in (
+        "integrity_valid",
+        "binding_verified",
+        "authenticity_verified",
+        "errors",
+        "transcript_cid",
+        "scope_note",
+    ):
         assert key in result, f"result missing required field: {key}"
     # binding_verified and authenticity_verified are always False in v0.3
     assert result["binding_verified"] is False
@@ -130,8 +136,14 @@ async def test_verify_tool_schema_always_has_scope_fields() -> None:
 
     # Empty dict (malformed pack) must also carry the scope fields
     result = await fn({})
-    for key in ("integrity_valid", "binding_verified", "authenticity_verified", "errors",
-                "transcript_cid", "scope_note"):
+    for key in (
+        "integrity_valid",
+        "binding_verified",
+        "authenticity_verified",
+        "errors",
+        "transcript_cid",
+        "scope_note",
+    ):
         assert key in result
     assert result["binding_verified"] is False
     assert result["authenticity_verified"] is False
